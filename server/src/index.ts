@@ -152,9 +152,17 @@ io.on('connection', (socket) => {
           break;
         case 'gameOver':
           io.to(gameRoom.id).emit('game:state', instance.state);
-          const winner = instance.playerOrder.find(p => p === event.data.winnerId);
-          const winnerName = getRoom(gameRoom.id)?.players.find(p => p.id === winner)?.nickname ?? 'Unknown';
-          io.to(gameRoom.id).emit('game:over', { winnerId: event.data.winnerId as string, winnerName });
+          const wId = event.data.winnerId as string;
+          let winnerName = 'Unknown';
+          if (wId === 'team') {
+            winnerName = 'Tim';
+          } else if (wId === 'none') {
+            winnerName = '-';
+          } else {
+            const w = instance.playerOrder.find(p => p === wId);
+            winnerName = getRoom(gameRoom.id)?.players.find(p => p.id === w)?.nickname ?? 'Unknown';
+          }
+          io.to(gameRoom.id).emit('game:over', { winnerId: wId, winnerName });
           setRoomState(gameRoom.id, 'finished');
           break;
         case 'fireResult':
