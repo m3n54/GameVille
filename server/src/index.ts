@@ -102,6 +102,50 @@ io.on('connection', (socket) => {
     io.to(roomData.id).emit('game:action', { type: 'turn', playerId: currentPlayerId });
   });
 
+  socket.on('game:action', (data) => {
+    // Find the room and game instance for this socket
+    let gameRoom: { id: string } | null = null;
+    for (const [roomId, instance] of GAMES) {
+      if (instance.playerOrder.includes(socket.id)) {
+        gameRoom = { id: roomId };
+        break;
+      }
+    }
+    if (!gameRoom) return;
+
+    const instance = GAMES.get(gameRoom.id);
+    if (!instance || instance.winner) return;
+
+    const engine = engines[instance.gameType];
+    if (!engine) return;
+
+    const result = engine.handleAction(instance.state, socket.id, data);
+    instance.state = result.newState;
+
+    // Process all events
+    for (const event of result.events) {
+      switch (event.type) {
+        case 'diceResult':
+          io.to(gameRoom.id).emit('game:state', instance.state);
+          io.to(gameRoom.id).emit('game:action', event.data);
+          break;
+        case 'turnChange':
+          io.to(gameRoom.id).emit('game:action', event.data);
+          break;
+        case 'gameOver':
+          instance.winner = event.data.winnerId as string;
+          const winner = instance.playerOrder.find(p => p === event.data.winnerId);
+          const winnerName = getRoom(gameRoom.id)?.players.find(p => p.id === winner)?.nickname ?? 'Unknown';
+          io.to(gameRoom.id).emit('game:over', { winnerId: event.data.winnerId as string, winnerName });
+          setRoomState(gameRoom.id, 'finished');
+          break;
+        case 'error':
+          socket.emit('room:error', event.data as { message: string });
+          break;
+      }
+    }
+  });
+
   socket.on('game:select', (data) => {
     const room = setGameType(socket.id, data.gameType);
     if (room) {
