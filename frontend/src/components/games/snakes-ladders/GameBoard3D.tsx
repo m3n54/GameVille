@@ -106,7 +106,7 @@ function LadderModel({ bottom, top }: { bottom: number; top: number }) {
   );
 }
 
-function TurnIndicator({ currentTurn, playerColors }: { currentTurn: number; playerIds: string[]; playerColors: string[] }) {
+function TurnIndicator({ currentTurn, playerColors }: { currentTurn: number; playerColors: string[] }) {
   const color = playerColors[currentTurn] || '#FF9BB5';
 
   return (
@@ -155,7 +155,6 @@ export default function GameBoard3D({ players, snakes, ladders, currentTurn }: G
         {/* Turn indicator */}
         <TurnIndicator
           currentTurn={currentTurn}
-          playerIds={players.map(p => p.id)}
           playerColors={players.map(p => p.color)}
         />
       </Canvas>
