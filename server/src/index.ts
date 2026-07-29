@@ -17,13 +17,17 @@ const engines: Record<string, BaseGame> = {
   'sea-battle': new SeaBattleEngine(),
 };
 
+const corsOrigin = (process.env.CORS_ORIGIN || 'http://localhost:3000')
+  .split(',')
+  .map((s) => s.trim());
+
 const app = express();
-app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:3000' }));
+app.use(cors({ origin: corsOrigin }));
 
 const httpServer = createServer(app);
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
   cors: {
-    origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+    origin: corsOrigin,
     methods: ['GET', 'POST'],
   },
   transports: ['websocket', 'polling'],

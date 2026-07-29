@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: gameville-server
+    env: node
+    rootDir: server
+    buildCommand: npm install && npm run build
+    startCommand: node dist/server/src/index.js
+    envVars:
+      - key: PORT
+        value: 3001
+      - key: CORS_ORIGIN
+        value: https://gameville.vercel.app
+    healthCheckPath: /health
