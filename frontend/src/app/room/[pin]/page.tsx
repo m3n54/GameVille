@@ -22,6 +22,7 @@ export default function RoomPage() {
   const { room, players, leaveRoom, toggleReady, selectGame, startGame } = useRoom(socket);
   const [gameState, setGameState] = useState<unknown>(null);
   const [gameActive, setGameActive] = useState(false);
+  const [gameWinner, setGameWinner] = useState<{ id: string; name: string } | null>(null);
 
   useEffect(() => {
     if (!socket) return;
@@ -38,9 +39,9 @@ export default function RoomPage() {
       setGameState(state);
     });
 
-    socket.on('game:over', () => {
-      setGameActive(false);
-      setGameState(null);
+    socket.on('game:over', (data: { winnerId: string; winnerName: string }) => {
+      setGameWinner({ id: data.winnerId, name: data.winnerName });
+      setGameActive(true); // tetap di game view
     });
 
     return () => {
@@ -107,6 +108,29 @@ export default function RoomPage() {
             ← Keluar
           </Button>
         </div>
+        {gameWinner && (
+          <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+            <motion.div
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              className="bg-white p-8 rounded-cute shadow-soft text-center max-w-sm mx-4"
+            >
+              <p className="text-5xl mb-4">{gameWinner.id === myId ? '🎉' : '🙌'}</p>
+              <h2 className="text-2xl font-bold text-cute-text mb-2">
+                {gameWinner.id === myId ? 'Kamu Menang!' : `${gameWinner.name} Menang!`}
+              </h2>
+              <p className="text-cute-muted mb-6">Game selesai!</p>
+              <div className="space-y-3">
+                <Button onClick={() => { setGameWinner(null); setGameActive(false); }} className="w-full">
+                  🔄 Kembali ke Lobby
+                </Button>
+                <Button variant="ghost" onClick={leaveRoom} className="w-full">
+                  🚪 Keluar Ruang
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
       </div>
     );
   }
