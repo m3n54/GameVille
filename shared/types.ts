@@ -75,10 +75,20 @@ export interface HangmanState {
   winner: string | null;
 }
 
+export interface Ship {
+  type: string;
+  cells: [number, number][];
+  hits: number;
+}
+
 export interface SeaBattleState {
   player1Id: string;
   player2Id: string;
   currentTurn: string;
   phase: 'setup' | 'playing' | 'finished';
   winner: string | null;
+  grid1: string[][];
+  grid2: string[][];
+  ships1: Ship[];
+  ships2: Ship[];
 }

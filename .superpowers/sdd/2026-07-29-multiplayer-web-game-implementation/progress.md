@@ -11,10 +11,7 @@ Task 7: fix round 1/5 (3 addressed, 0 open; commits e527d5d..6037557)
 Task 7: complete (commits 51cbbc4..6037557, review clean)
 Task 8: fix round 1/5 (1 addressed, 0 open; commits 9d6bc55..bf8aa42, re-review clean)
 Task 8: complete (commits 6037557..bf8aa42, review clean)
-Task 9: pending
-Task 7: pending
-Task 8: pending
-Task 9: pending
-Task 10: pending
+Task 9: complete (commits bf8aa42..166213c, review clean; minor: no server-side turn enforcement, 'none' sentinel — both brief-originated)
+Task 10: dispatched implementer (a9ccbffc1b6d2672c) — waiting for completion
 Task 11: pending
 Task 12: pending

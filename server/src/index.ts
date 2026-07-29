@@ -7,12 +7,14 @@ import { createRoom, joinRoom, leaveRoom, toggleReady, setGameType, canStartGame
 import { BaseGame, GameInstance } from './games/base';
 import { SnakesLaddersEngine } from './games/snakes-ladders';
 import { HangmanEngine } from './games/hangman';
+import { SeaBattleEngine } from './games/sea-battle';
 
 const GAMES = new Map<string, GameInstance>();
 
 const engines: Record<string, BaseGame> = {
   'snakes-ladders': new SnakesLaddersEngine(),
   'hangman': new HangmanEngine(),
+  'sea-battle': new SeaBattleEngine(),
 };
 
 const app = express();
@@ -150,6 +152,16 @@ io.on('connection', (socket) => {
           const winnerName = getRoom(gameRoom.id)?.players.find(p => p.id === winner)?.nickname ?? 'Unknown';
           io.to(gameRoom.id).emit('game:over', { winnerId: event.data.winnerId as string, winnerName });
           setRoomState(gameRoom.id, 'finished');
+          break;
+        case 'fireResult':
+          socket.emit('game:action', { type: 'fireResult', ...event.data });
+          io.to(gameRoom.id).emit('game:state', instance.state);
+          break;
+        case 'gameStart':
+          io.to(gameRoom.id).emit('game:state', instance.state);
+          break;
+        case 'shipsPlaced':
+          io.to(gameRoom.id).emit('game:state', instance.state);
           break;
         case 'error':
           socket.emit('room:error', event.data as { message: string });
