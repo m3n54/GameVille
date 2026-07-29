@@ -209,7 +209,11 @@ io.on('connection', (socket) => {
 
       // Clean up game if room finished
       const game = GAMES.get(result.roomId);
-      if (game && getRoom(result.roomId)?.state === 'finished') {
+      const room = getRoom(result.roomId);
+      if (room?.state === 'finished') {
+        GAMES.delete(result.roomId);
+      } else if (game && (!room || room.players.length === 0)) {
+        // Clean up active game if no players remain
         GAMES.delete(result.roomId);
       }
     }

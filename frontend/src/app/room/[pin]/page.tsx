@@ -20,6 +20,7 @@ export default function RoomPage() {
   const pin = params.pin as string;
   const { socket, connected } = useSocket();
   const { room, players, leaveRoom, toggleReady, selectGame, startGame } = useRoom(socket);
+  const myId = socket?.id;
   const [gameState, setGameState] = useState<unknown>(null);
   const [gameActive, setGameActive] = useState(false);
   const [gameWinner, setGameWinner] = useState<{ id: string; name: string } | null>(null);
@@ -50,7 +51,7 @@ export default function RoomPage() {
       socket.off('game:state');
       socket.off('game:over');
     };
-  }, [socket]);
+  }, [socket, myId]);
 
   // Room events listeners untuk update dari server
   useEffect(() => {
@@ -68,7 +69,6 @@ export default function RoomPage() {
     };
   }, [socket]);
 
-  const myId = socket?.id;
   const isHost = players.find(p => p.id === myId)?.isHost ?? false;
   const allReady = players.every(p => p.isReady) && players.length >= 2;
 
