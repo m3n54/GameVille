@@ -159,6 +159,8 @@ io.on('connection', (socket) => {
           break;
         case 'gameStart':
           io.to(gameRoom.id).emit('game:state', instance.state);
+          io.to(gameRoom.id).emit('game:action', { type: 'gameStart', firstTurn: event.data.firstTurn });
+          io.to(gameRoom.id).emit('game:action', { type: 'turn', nextPlayerId: event.data.firstTurn });
           break;
         case 'shipsPlaced':
           io.to(gameRoom.id).emit('game:state', instance.state);

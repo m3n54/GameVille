@@ -116,6 +116,9 @@ export class SeaBattleEngine extends BaseGame {
     }
 
     if (action.type === 'fire') {
+      if (state.phase !== 'playing') {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Game belum dimulai!' } }] };
+      }
       if (playerId !== state.currentTurn) {
         return { newState: state, events: [{ type: 'error', data: { message: 'Bukan giliranmu!' } }] };
       }

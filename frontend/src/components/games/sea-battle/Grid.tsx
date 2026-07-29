@@ -21,7 +21,7 @@ export default function Grid({ grid, isOwn, showShips, onCellClick, lastShot, di
   const cellIcon = (val: string) => {
     if (val === 'H') return '🔥';
     if (val === 'M') return '💨';
-    if (val === 'S' && showShips) return '🚳️';
+    if (val === 'S' && showShips) return '🚢';
     return '';
   };
 
