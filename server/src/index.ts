@@ -6,11 +6,13 @@ import { ClientToServerEvents, ServerToClientEvents, GameType } from './types';
 import { createRoom, joinRoom, leaveRoom, toggleReady, setGameType, canStartGame, setRoomState, getRoom, findByPlayer } from './rooms';
 import { BaseGame, GameInstance } from './games/base';
 import { SnakesLaddersEngine } from './games/snakes-ladders';
+import { HangmanEngine } from './games/hangman';
 
 const GAMES = new Map<string, GameInstance>();
 
 const engines: Record<string, BaseGame> = {
   'snakes-ladders': new SnakesLaddersEngine(),
+  'hangman': new HangmanEngine(),
 };
 
 const app = express();
@@ -133,10 +135,17 @@ io.on('connection', (socket) => {
           io.to(gameRoom.id).emit('game:state', instance.state);
           io.to(gameRoom.id).emit('game:action', event.data);
           break;
+        case 'correctGuess':
+        case 'wrongGuess':
+          io.to(gameRoom.id).emit('game:state', instance.state);
+          io.to(gameRoom.id).emit('game:action', { type: event.type, ...event.data });
+          break;
         case 'turnChange':
-          io.to(gameRoom.id).emit('game:action', event.data);
+          io.to(gameRoom.id).emit('game:state', instance.state);
+          io.to(gameRoom.id).emit('game:action', { type: 'turn', ...event.data });
           break;
         case 'gameOver':
+          io.to(gameRoom.id).emit('game:state', instance.state);
           const winner = instance.playerOrder.find(p => p === event.data.winnerId);
           const winnerName = getRoom(gameRoom.id)?.players.find(p => p.id === winner)?.nickname ?? 'Unknown';
           io.to(gameRoom.id).emit('game:over', { winnerId: event.data.winnerId as string, winnerName });
