@@ -2,8 +2,16 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
-import { ClientToServerEvents, ServerToClientEvents } from './types';
+import { ClientToServerEvents, ServerToClientEvents, GameType } from './types';
 import { createRoom, joinRoom, leaveRoom, toggleReady, setGameType, canStartGame, setRoomState, getRoom, findByPlayer } from './rooms';
+import { BaseGame, GameInstance } from './games/base';
+import { SnakesLaddersEngine } from './games/snakes-ladders';
+
+const GAMES = new Map<string, GameInstance>();
+
+const engines: Record<string, BaseGame> = {
+  'snakes-ladders': new SnakesLaddersEngine(),
+};
 
 const app = express();
 app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:3000' }));
@@ -63,6 +71,37 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('game:start', () => {
+    const roomData = findByPlayer(socket.id);
+    if (!roomData) return;
+    if (roomData.hostId !== socket.id) return;
+    if (!canStartGame(roomData.id)) return;
+
+    const engine = engines[roomData.gameType!];
+    if (!engine) return;
+
+    const playerOrder = roomData.players.map(p => p.id);
+    const instance: GameInstance = {
+      roomId: roomData.id,
+      gameType: roomData.gameType!,
+      state: engine.createInitialState(playerOrder),
+      currentTurnIndex: 0,
+      playerOrder,
+      winner: null,
+    };
+
+    GAMES.set(roomData.id, instance);
+    setRoomState(roomData.id, 'playing');
+
+    // Notify all players
+    io.to(roomData.id).emit('game:started', roomData.gameType!);
+    io.to(roomData.id).emit('game:state', instance.state);
+
+    // Notify whose turn it is
+    const currentPlayerId = instance.playerOrder[instance.currentTurnIndex];
+    io.to(roomData.id).emit('game:action', { type: 'turn', playerId: currentPlayerId });
+  });
+
   socket.on('game:select', (data) => {
     const room = setGameType(socket.id, data.gameType);
     if (room) {
@@ -96,6 +135,12 @@ io.on('connection', (socket) => {
       socket.to(result.roomId).emit('player:left', socket.id);
       if (result.newHost) {
         socket.to(result.roomId).emit('player:update', getRoom(result.roomId)!.players);
+      }
+
+      // Clean up game if room finished
+      const game = GAMES.get(result.roomId);
+      if (game && getRoom(result.roomId)?.state === 'finished') {
+        GAMES.delete(result.roomId);
       }
     }
     console.log(`[-] Player disconnected: ${socket.id}`);
