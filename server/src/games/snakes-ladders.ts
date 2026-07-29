@@ -56,11 +56,12 @@ export class SnakesLaddersEngine extends BaseGame {
       }
 
       player.position = newPos;
+      state.phase = 'moving';
 
       // Check snakes
       let snakeHit: [number, number] | null = null;
       for (const [head, tail] of state.snakes) {
-        if (newPos === head) {
+        if (player.position === head) {
           player.position = tail;
           snakeHit = [head, tail];
           break;
@@ -70,7 +71,7 @@ export class SnakesLaddersEngine extends BaseGame {
       // Check ladders
       let ladderHit: [number, number] | null = null;
       for (const [bottom, top] of state.ladders) {
-        if (newPos === bottom) {
+        if (player.position === bottom) {
           player.position = top;
           ladderHit = [bottom, top];
           break;
@@ -94,6 +95,8 @@ export class SnakesLaddersEngine extends BaseGame {
         state.phase = 'done';
         events.push({ type: 'gameOver', data: { winnerId: playerId } });
       } else {
+        // Ready for next player's roll
+        state.phase = 'rolling';
         // Next turn
         state.currentTurn = (state.currentTurn + 1) % state.players.length;
         state.diceValue = null;

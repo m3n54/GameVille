@@ -114,7 +114,11 @@ io.on('connection', (socket) => {
     if (!gameRoom) return;
 
     const instance = GAMES.get(gameRoom.id);
-    if (!instance || instance.winner) return;
+    if (!instance) return;
+
+    // Single source of truth: engine's state.winner — block actions after game over
+    const currentState = instance.state as { winner?: string | null };
+    if (currentState.winner) return;
 
     const engine = engines[instance.gameType];
     if (!engine) return;
@@ -133,7 +137,6 @@ io.on('connection', (socket) => {
           io.to(gameRoom.id).emit('game:action', event.data);
           break;
         case 'gameOver':
-          instance.winner = event.data.winnerId as string;
           const winner = instance.playerOrder.find(p => p === event.data.winnerId);
           const winnerName = getRoom(gameRoom.id)?.players.find(p => p.id === winner)?.nickname ?? 'Unknown';
           io.to(gameRoom.id).emit('game:over', { winnerId: event.data.winnerId as string, winnerName });
