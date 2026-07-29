@@ -3,7 +3,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import { ClientToServerEvents, ServerToClientEvents } from './types';
-import { createRoom, joinRoom, leaveRoom, toggleReady, setGameType, canStartGame, setRoomState, getRoom } from './rooms';
+import { createRoom, joinRoom, leaveRoom, toggleReady, setGameType, canStartGame, setRoomState, getRoom, findByPlayer } from './rooms';
 
 const app = express();
 app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:3000' }));
@@ -70,6 +70,26 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('chat:message', (data) => {
+    const room = findRoomBySocket(socket.id);
+    if (!room) return;
+    socket.to(room.id).emit('chat:received', {
+      playerId: socket.id,
+      nickname: findPlayerNickname(socket.id),
+      text: data.text,
+    });
+  });
+
+  socket.on('reaction:send', (data) => {
+    const room = findRoomBySocket(socket.id);
+    if (!room) return;
+    socket.to(room.id).emit('reaction:received', {
+      playerId: socket.id,
+      nickname: findPlayerNickname(socket.id),
+      emoji: data.emoji,
+    });
+  });
+
   socket.on('disconnect', () => {
     const result = leaveRoom(socket.id);
     if (result.roomId) {
@@ -81,6 +101,18 @@ io.on('connection', (socket) => {
     console.log(`[-] Player disconnected: ${socket.id}`);
   });
 });
+
+function findRoomBySocket(socketId: string) {
+  const room = findByPlayer(socketId);
+  if (!room) return null;
+  return { id: room.id };
+}
+
+function findPlayerNickname(socketId: string): string {
+  const room = findByPlayer(socketId);
+  if (!room) return 'Unknown';
+  return room.players.find(p => p.id === socketId)?.nickname ?? 'Unknown';
+}
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 httpServer.listen(PORT, () => {
