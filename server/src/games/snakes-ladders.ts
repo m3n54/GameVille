@@ -8,7 +8,7 @@ const SNAKES: [number, number][] = [
 
 const LADDERS: [number, number][] = [
   [1, 38], [4, 14], [9, 31], [21, 42], [28, 84],
-  [36, 44], [51, 67], [71, 91], [80, 100],
+  [36, 44], [51, 67], [71, 91], [80, 99],
 ];
 
 export class SnakesLaddersEngine extends BaseGame {
@@ -50,9 +50,9 @@ export class SnakesLaddersEngine extends BaseGame {
       const player = state.players[playerIndex];
       let newPos = player.position + dice;
 
-      // Bounce back if exceeds 100
-      if (newPos > 100) {
-        newPos = 100 - (newPos - 100);
+      // Bounce back if exceeds 99 (max tile)
+      if (newPos > 99) {
+        newPos = 99 - (newPos - 99);
       }
 
       player.position = newPos;
@@ -89,8 +89,8 @@ export class SnakesLaddersEngine extends BaseGame {
         },
       });
 
-      // Check win
-      if (player.position >= 100) {
+      // Check win (0-99 board, win at >= 99)
+      if (player.position >= 99) {
         state.winner = playerId;
         state.phase = 'done';
         events.push({ type: 'gameOver', data: { winnerId: playerId } });

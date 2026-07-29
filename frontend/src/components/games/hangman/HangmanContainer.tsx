@@ -127,8 +127,8 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
         >
           {isOver
             ? gameState.winner === 'none'
-              ? `Game Over! Kata: ${word ?? '???'}`
-              : 'Selamat! Kata berhasil ditebak!'
+              ? `😵 Game Over! Kata: ${word ?? '???'}`
+              : '🎉 Selamat! Kalian menang! Kata berhasil ditebak!'
             : message || 'Menunggu giliran...'}
         </motion.div>
       </AnimatePresence>

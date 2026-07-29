@@ -45,6 +45,11 @@ export class HangmanEngine extends BaseGame {
     if (state.winner) return { newState: state, events: [] };
 
     if (action.type === 'guess') {
+      // Server-side turn enforcement
+      if (state.playerOrder.length > 0 && state.playerOrder[state.currentTurn] !== playerId) {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Bukan giliranmu!' } }] };
+      }
+
       const raw = (action.payload as { letter?: string })?.letter;
       if (!raw) {
         return { newState: state, events: [{ type: 'error', data: { message: 'Tebak 1 huruf!' } }] };
@@ -75,8 +80,8 @@ export class HangmanEngine extends BaseGame {
 
         // Check win: every letter revealed
         if (state.correctLetters.every(l => l !== null)) {
-          state.winner = playerId;
-          events.push({ type: 'gameOver', data: { winnerId: playerId, word: state.word } });
+          state.winner = 'team';
+          events.push({ type: 'gameOver', data: { winnerId: 'team', word: state.word, won: true } });
           return { newState: { ...state }, events };
         }
       } else {

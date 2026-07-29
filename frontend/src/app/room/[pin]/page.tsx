@@ -53,19 +53,30 @@ export default function RoomPage() {
     };
   }, [socket, myId]);
 
-  // Room events listeners untuk update dari server
+  // Update displayed players when room state changes
   useEffect(() => {
-    if (!socket) return;
+    if (!socket || !room) return;
 
-    const handlePlayerEntered = () => { /* room state updated via room:state */ };
-    const handlePlayerLeft = () => { /* room state updated via room:state */ };
+    const handleState = () => {
+      // setGameState uses its existing value — room is updated via useRoom
+    };
 
-    socket.on('player:entered', handlePlayerEntered);
-    socket.on('player:left', handlePlayerLeft);
+    const handleEntered = () => {
+      // Room state updated via useRoom's internal socket listeners
+    };
+
+    const handleLeft = () => {
+      // Room state updated via useRoom's internal socket listeners
+    };
+
+    socket.on('room:state', handleState);
+    socket.on('player:entered', handleEntered);
+    socket.on('player:left', handleLeft);
 
     return () => {
-      socket.off('player:entered', handlePlayerLeft);
-      socket.off('player:left', handlePlayerLeft);
+      socket.off('room:state', handleState);
+      socket.off('player:entered', handleEntered);
+      socket.off('player:left', handleLeft);
     };
   }, [socket]);
 
