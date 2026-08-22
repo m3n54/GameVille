@@ -134,11 +134,19 @@ interface Dice3DProps {
 export default function Dice3D({ value, rolling, onRoll, disabled }: Dice3DProps): JSX.Element {
   return (
     <div className="flex flex-col items-center gap-3">
-      <div className="w-24 h-24">
-        <Canvas camera={{ position: [0, 0, 4], fov: 50 }}>
-          <ambientLight intensity={0.6} />
-          <pointLight position={[5, 5, 5]} />
-          <DiceModel value={value || 1} rolling={rolling} />
+      <div className="w-36 h-36">
+        <Canvas camera={{ position: [0, 0, 4.6], fov: 45 }}>
+          <ambientLight intensity={0.65} />
+          <pointLight position={[4, 6, 5]} intensity={0.9} />
+          <pointLight position={[-4, -3, 3]} intensity={0.35} />
+          <group position={[0, 0.15, 0]}>
+            <DiceModel value={value || 1} rolling={rolling} />
+          </group>
+          {/* Soft ground shadow */}
+          <mesh position={[0, -1.15, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+            <circleGeometry args={[1.05, 32]} />
+            <meshBasicMaterial color="#E8C7D3" transparent opacity={0.45} />
+          </mesh>
         </Canvas>
       </div>
       <motion.button
