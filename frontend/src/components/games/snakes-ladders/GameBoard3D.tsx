@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Html } from '@react-three/drei';
 import * as THREE from 'three';
@@ -57,22 +57,76 @@ function TileNumber({ index }: { index: number }) {
 }
 
 function PlayerPiece({ position, color }: { position: number; color: string }) {
-  const [tx, tz] = tileToWorld(position);
   const groupRef = useRef<THREE.Group>(null);
-  const target = new THREE.Vector3(tx, 0.32, tz);
+
+  // Animation state kept in refs so useFrame stays stable across renders
+  const anim = useRef({
+    from: position,
+    to: position,
+    progress: 1, // 0..1 along current movement
+    phase: 'idle' as 'walking' | 'sliding' | 'idle',
+  });
+  // Track previous prop value to detect moves
+  const prevPosition = useRef(position);
+
+  useEffect(() => {
+    if (position === prevPosition.current) return;
+    const a = anim.current;
+    a.from = prevPosition.current;
+    a.to = position;
+    a.progress = 0;
+
+    // Snake bite or ladder climb (|delta| > dice max 6) → single glide arc
+    a.phase = Math.abs(position - prevPosition.current) > 6 ? 'sliding' : 'walking';
+    prevPosition.current = position;
+  }, [position]);
 
   useFrame((_, delta) => {
-    if (!groupRef.current) return;
-    // Smooth hop toward the target tile
     const g = groupRef.current;
-    g.position.lerp(target, Math.min(1, delta * 6));
+    if (!g || anim.current.phase === 'idle') return;
+    const a = anim.current;
+    const speed = a.phase === 'walking' ? 3.2 : 1.6; // hops faster than glides
+    a.progress = Math.min(1, a.progress + delta * speed);
+
+    const [fx, fz] = tileToWorld(a.from);
+    const [tx, tz] = tileToWorld(a.to);
+    const t = easeInOut(a.progress);
+
+    if (a.phase === 'walking') {
+      // Step tile-by-tile toward the target
+      const dir = Math.sign(a.to - a.from) || 1;
+      const steps = Math.abs(a.to - a.from);
+      const stepFloat = steps * t;
+      const stepIndex = Math.min(steps - 1, Math.floor(stepFloat));
+      const stepT = steps === 0 ? 1 : stepFloat - stepIndex;
+      const fromTile = a.from + dir * stepIndex;
+      const [sx, sz] = tileToWorld(fromTile);
+      const [ex, ez] = tileToWorld(fromTile + dir);
+      g.position.x = sx + (ex - sx) * stepT;
+      g.position.z = sz + (ez - sz) * stepT;
+      // Hop arc — one bounce per tile
+      g.position.y = 0.32 + Math.sin(Math.PI * stepT) * 0.35;
+    } else {
+      // Sliding (snake/ladder): smooth diagonal glide with high arc
+      g.position.x = fx + (tx - fx) * t;
+      g.position.z = fz + (tz - fz) * t;
+      const arcHeight = Math.max(0.8, Math.hypot(tx - fx, tz - fz) * 0.18);
+      g.position.y = 0.32 + Math.sin(Math.PI * t) * arcHeight;
+    }
+
+    if (a.progress >= 1) {
+      a.phase = 'idle';
+      const [rx, rz] = tileToWorld(a.to);
+      g.position.set(rx, 0.32, rz);
+    }
   });
 
   // Slight per-player offset so pieces on the same tile don't fully overlap
-  const seed = position % 4;
+  const [ox, oz] = tileToWorld(position);
+  const seed = (position % 4) - 1.5;
 
   return (
-    <group ref={groupRef} position={[target.x + (seed - 1.5) * 0.08, 0.32, target.z]}>
+    <group ref={groupRef} position={[ox + seed * 0.08, 0.32, oz]}>
       {/* Pawn body — rounded cone look */}
       <mesh>
         <sphereGeometry args={[0.2, 20, 20]} />
@@ -155,3 +209,8 @@ export default function GameBoard3D({ players, snakes, ladders, currentTurn }: G
 
 // Module-level set consumed by BoardTile (rebuilt each render of GameBoard3D)
 let SPECIAL_TILES = new Set<number>();
+
+// Smooth acceleration/deceleration for movement phases
+function easeInOut(t: number): number {
+  return t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+}
