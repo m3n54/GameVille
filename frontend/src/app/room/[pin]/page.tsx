@@ -28,10 +28,6 @@ export default function RoomPage() {
   useEffect(() => {
     if (!socket) return;
 
-    socket.on('room:state', () => {
-      // Room state updated from server
-    });
-
     socket.on('game:started', () => {
       setGameActive(true);
     });
@@ -42,50 +38,21 @@ export default function RoomPage() {
 
     socket.on('game:over', (data: { winnerId: string; winnerName: string }) => {
       setGameWinner({ id: data.winnerId, name: data.winnerName });
-      setGameActive(true); // tetap di game view
+      setGameActive(true);
     });
 
     return () => {
-      socket.off('room:state');
       socket.off('game:started');
       socket.off('game:state');
       socket.off('game:over');
     };
   }, [socket, myId]);
 
-  // Update displayed players when room state changes
-  useEffect(() => {
-    if (!socket || !room) return;
-
-    const handleState = () => {
-      // setGameState uses its existing value — room is updated via useRoom
-    };
-
-    const handleEntered = () => {
-      // Room state updated via useRoom's internal socket listeners
-    };
-
-    const handleLeft = () => {
-      // Room state updated via useRoom's internal socket listeners
-    };
-
-    socket.on('room:state', handleState);
-    socket.on('player:entered', handleEntered);
-    socket.on('player:left', handleLeft);
-
-    return () => {
-      socket.off('room:state', handleState);
-      socket.off('player:entered', handleEntered);
-      socket.off('player:left', handleLeft);
-    };
-  }, [socket]);
-
   const isHost = players.find(p => p.id === myId)?.isHost ?? false;
   const allReady = players.every(p => p.isReady) && players.length >= 2;
 
   const myNickname = players.find(p => p.id === myId)?.nickname ?? '';
 
-  // Pastikan socket ready sebelum render
   if (!connected || !room) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -94,7 +61,6 @@ export default function RoomPage() {
     );
   }
 
-  // Jika game aktif, render game view
   if (gameActive && room.gameType) {
     const renderGame = () => {
       switch (room.gameType) {
@@ -146,12 +112,10 @@ export default function RoomPage() {
     );
   }
 
-  // Lobby view
   return (
     <div className="min-h-screen p-4 md:p-8">
       <div className="max-w-4xl mx-auto">
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left: Room Info + Players */}
           <div className="lg:col-span-2 space-y-6">
             <Card>
               <div className="flex items-center justify-between mb-4">
@@ -172,7 +136,6 @@ export default function RoomPage() {
               <PlayerList players={players} myId={myId} />
             </Card>
 
-            {/* Game Selector */}
             <Card title="🎯 Pilih Game">
               <div className="space-y-3">
                 {(['snakes-ladders', 'hangman', 'sea-battle'] as GameType[]).map((g) => (
@@ -198,7 +161,6 @@ export default function RoomPage() {
             </Card>
           </div>
 
-          {/* Right: Controls + Chat */}
           <div className="space-y-4">
             <Card>
               <div className="space-y-3">

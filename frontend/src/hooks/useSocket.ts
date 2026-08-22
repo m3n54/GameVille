@@ -18,6 +18,8 @@ export function useSocket() {
     setSocket(s);
 
     return () => {
+      s.off('connect');
+      s.off('disconnect');
       disconnectSocket();
     };
   }, []);
