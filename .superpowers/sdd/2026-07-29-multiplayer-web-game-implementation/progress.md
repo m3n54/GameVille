@@ -17,4 +17,5 @@ Task 10: complete (commits 166213c..65e6854, review clean)
 Task 11: fix round 1/5 (3 addressed, 0 open; commits 87dbc24..5cc159d)
 Task 11: complete (commits 65e6854..5cc159d, review clean)
 Task 12: complete (commits 5cc159d..1a98697, review clean)
-Final review: pending
+Final review: fix wave 1 (6 findings addressed, 0 open; commits 1a98697..bdbfd2d; all clean)
+Final review: ✅ Ready to ship
