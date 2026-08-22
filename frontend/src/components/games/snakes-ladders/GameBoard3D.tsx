@@ -1,7 +1,12 @@
 'use client';
 
-import { Canvas } from '@react-three/fiber';
+import { useRef } from 'react';
+import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Html } from '@react-three/drei';
+import * as THREE from 'three';
+import SnakeModel from './SnakeModel';
+import LadderModel from './LadderModel';
+import { tileToWorld, tileColor, TILE_SIZE } from './boardUtils';
 
 interface PlayerState {
   id: string;
@@ -16,93 +21,73 @@ interface GameBoard3DProps {
   currentTurn: number;
 }
 
-const TILE_COLORS = ['#FFD3B6', '#FF9BB5', '#A8D8EA', '#B5EAD7', '#FFDAC1'];
-const GRID_SIZE = 10;
-const TILE_SIZE = 0.9;
-const GAP = 0.05;
+/** Tiles occupied by snake heads/tails or ladder ends get an accent tint. */
+function buildSpecialTileSet(snakes: [number, number][], ladders: [number, number][]): Set<number> {
+  const special = new Set<number>();
+  for (const [a] of snakes) special.add(a);
+  for (const [, b] of snakes) special.add(b);
+  for (const [b] of ladders) special.add(b);
+  for (const [, t] of ladders) special.add(t);
+  return special;
+}
 
-function BoardTile({ index, color }: { index: number; color: string }) {
-  const row = Math.floor(index / GRID_SIZE);
-  const col = index % GRID_SIZE;
-  const x = (col - 4.5) * (TILE_SIZE + GAP);
-  const z = (row - 4.5) * (TILE_SIZE + GAP);
+function BoardTile({ index }: { index: number }) {
+  const [x, z] = tileToWorld(index);
+  const base = tileColor(index);
+  const isSpecial = SPECIAL_TILES.has(index);
+  const color = isSpecial ? '#FFE9A8' : base; // warm accent under snakes/ladders
 
   return (
     <mesh position={[x, 0, z]} receiveShadow>
-      <boxGeometry args={[TILE_SIZE, 0.1, TILE_SIZE]} />
-      <meshStandardMaterial color={color} />
-      <Html position={[0, 0.2, 0]} center>
-        <span className="text-[8px] font-bold text-gray-500 select-none">{index + 1}</span>
-      </Html>
+      <boxGeometry args={[TILE_SIZE, 0.12, TILE_SIZE]} />
+      <meshStandardMaterial color={color} roughness={0.85} />
     </mesh>
+  );
+}
+
+function TileNumber({ index }: { index: number }) {
+  const [x, z] = tileToWorld(index);
+  return (
+    <Html position={[x, 0.18, z]} center zIndexRange={[10, 0]}>
+      <span className="text-[8px] font-bold text-gray-400 select-none pointer-events-none">
+        {index + 1}
+      </span>
+    </Html>
   );
 }
 
 function PlayerPiece({ position, color }: { position: number; color: string }) {
-  const row = Math.floor(position / GRID_SIZE);
-  const col = position % GRID_SIZE;
-  const x = (col - 4.5) * (TILE_SIZE + GAP);
-  const z = (row - 4.5) * (TILE_SIZE + GAP);
+  const [tx, tz] = tileToWorld(position);
+  const groupRef = useRef<THREE.Group>(null);
+  const target = new THREE.Vector3(tx, 0.32, tz);
+
+  useFrame((_, delta) => {
+    if (!groupRef.current) return;
+    // Smooth hop toward the target tile
+    const g = groupRef.current;
+    g.position.lerp(target, Math.min(1, delta * 6));
+  });
+
+  // Slight per-player offset so pieces on the same tile don't fully overlap
+  const seed = position % 4;
 
   return (
-    <group position={[x, 0.3, z]}>
+    <group ref={groupRef} position={[target.x + (seed - 1.5) * 0.08, 0.32, target.z]}>
+      {/* Pawn body — rounded cone look */}
       <mesh>
-        <sphereGeometry args={[0.25, 16, 16]} />
-        <meshStandardMaterial color={color} />
+        <sphereGeometry args={[0.2, 20, 20]} />
+        <meshStandardMaterial color={color} roughness={0.35} />
       </mesh>
-      <mesh position={[0, -0.15, 0]}>
-        <cylinderGeometry args={[0.15, 0.2, 0.08, 12]} />
-        <meshStandardMaterial color="#4A4A4A" />
+      <mesh position={[0, -0.16, 0]}>
+        <cylinderGeometry args={[0.12, 0.19, 0.1, 14]} />
+        <meshStandardMaterial color="#4A4A4A" roughness={0.5} />
+      </mesh>
+      {/* Tiny highlight */}
+      <mesh position={[0.06, 0.08, 0.06]}>
+        <sphereGeometry args={[0.05, 10, 10]} />
+        <meshStandardMaterial color="#FFFFFF" transparent opacity={0.5} />
       </mesh>
     </group>
-  );
-}
-
-function SnakeModel({ head, tail }: { head: number; tail: number }) {
-  const headRow = Math.floor(head / GRID_SIZE);
-  const headCol = head % GRID_SIZE;
-  const tailRow = Math.floor(tail / GRID_SIZE);
-  const tailCol = tail % GRID_SIZE;
-
-  const hx = (headCol - 4.5) * (TILE_SIZE + GAP);
-  const hz = (headRow - 4.5) * (TILE_SIZE + GAP);
-  const tx = (tailCol - 4.5) * (TILE_SIZE + GAP);
-  const tz = (tailRow - 4.5) * (TILE_SIZE + GAP);
-
-  const midX = (hx + tx) / 2;
-  const midZ = (hz + tz) / 2;
-  const length = Math.sqrt((hx - tx) ** 2 + (hz - tz) ** 2);
-  const angle = Math.atan2(hz - tz, hx - tx);
-
-  return (
-    <mesh position={[midX, 0.05, midZ]} rotation={[0, -angle, 0]}>
-      <cylinderGeometry args={[0.06, 0.12, length, 6]} />
-      <meshStandardMaterial color="#E74C3C" transparent opacity={0.6} />
-    </mesh>
-  );
-}
-
-function LadderModel({ bottom, top }: { bottom: number; top: number }) {
-  const botRow = Math.floor(bottom / GRID_SIZE);
-  const botCol = bottom % GRID_SIZE;
-  const topRow = Math.floor(top / GRID_SIZE);
-  const topCol = top % GRID_SIZE;
-
-  const bx = (botCol - 4.5) * (TILE_SIZE + GAP);
-  const bz = (botRow - 4.5) * (TILE_SIZE + GAP);
-  const tx = (topCol - 4.5) * (TILE_SIZE + GAP);
-  const tz = (topRow - 4.5) * (TILE_SIZE + GAP);
-
-  const midX = (bx + tx) / 2;
-  const midZ = (bz + tz) / 2;
-  const length = Math.sqrt((bx - tx) ** 2 + (bz - tz) ** 2);
-  const angle = Math.atan2(bz - tz, bx - tx);
-
-  return (
-    <mesh position={[midX, 0.05, midZ]} rotation={[0, -angle, 0]}>
-      <boxGeometry args={[0.08, 0.08, length]} />
-      <meshStandardMaterial color="#2ECC71" transparent opacity={0.7} />
-    </mesh>
   );
 }
 
@@ -110,7 +95,7 @@ function TurnIndicator({ currentTurn, playerColors }: { currentTurn: number; pla
   const color = playerColors[currentTurn] || '#FF9BB5';
 
   return (
-    <Html position={[0, 3, 0]} center>
+    <Html position={[0, 3.2, 0]} center>
       <div className="bg-white px-4 py-2 rounded-cute shadow-soft border-2 border-primary text-center">
         <p className="text-sm font-bold" style={{ color }}>Giliran pemain #{currentTurn + 1}</p>
       </div>
@@ -119,32 +104,42 @@ function TurnIndicator({ currentTurn, playerColors }: { currentTurn: number; pla
 }
 
 export default function GameBoard3D({ players, snakes, ladders, currentTurn }: GameBoard3DProps) {
+  const specialTiles = buildSpecialTileSet(snakes, ladders);
+  SPECIAL_TILES = specialTiles;
+
   return (
-    <div className="w-full h-[500px] md:h-[600px] bg-gradient-to-b from-blue-50 to-pink-50 rounded-cute overflow-hidden">
-      <Canvas camera={{ position: [8, 8, 8], fov: 45 }}>
-        <ambientLight intensity={0.6} />
-        <directionalLight position={[5, 10, 5]} intensity={0.8} castShadow />
+    <div className="w-full h-[500px] md:h-[600px] bg-gradient-to-b from-sky-50 via-pink-50 to-amber-50 rounded-cute overflow-hidden">
+      <Canvas shadows camera={{ position: [9, 11, 9], fov: 42 }}>
+        <ambientLight intensity={0.65} />
+        <directionalLight
+          position={[6, 12, 4]}
+          intensity={1.1}
+          castShadow
+          shadow-mapSize-width={1024}
+          shadow-mapSize-height={1024}
+        />
         <OrbitControls
-          enableZoom={true}
+          enableZoom
           enablePan={false}
-          minPolarAngle={Math.PI / 4}
-          maxPolarAngle={Math.PI / 2.5}
+          minPolarAngle={Math.PI / 4.5}
+          maxPolarAngle={Math.PI / 2.6}
           target={[0, 0, 0]}
         />
 
-        {/* Board */}
+        {/* Board tiles */}
         {Array.from({ length: 100 }, (_, i) => (
-          <BoardTile key={i} index={i} color={TILE_COLORS[Math.floor(i / 10) % TILE_COLORS.length]} />
+          <BoardTile key={`t-${i}`} index={i} />
+        ))}
+        {Array.from({ length: 100 }, (_, i) => (
+          <TileNumber key={`n-${i}`} index={i} />
         ))}
 
-        {/* Snakes */}
+        {/* Snakes & Ladders */}
         {snakes.map(([head, tail], i) => (
-          <SnakeModel key={`s-${i}`} head={head} tail={tail} />
+          <SnakeModel key={`s-${i}`} headTile={head} tailTile={tail} />
         ))}
-
-        {/* Ladders */}
         {ladders.map(([bottom, top], i) => (
-          <LadderModel key={`l-${i}`} bottom={bottom} top={top} />
+          <LadderModel key={`l-${i}`} bottomTile={bottom} topTile={top} />
         ))}
 
         {/* Player pieces */}
@@ -152,12 +147,11 @@ export default function GameBoard3D({ players, snakes, ladders, currentTurn }: G
           <PlayerPiece key={p.id} position={p.position} color={p.color} />
         ))}
 
-        {/* Turn indicator */}
-        <TurnIndicator
-          currentTurn={currentTurn}
-          playerColors={players.map(p => p.color)}
-        />
+        <TurnIndicator currentTurn={currentTurn} playerColors={players.map(p => p.color)} />
       </Canvas>
     </div>
   );
 }
+
+// Module-level set consumed by BoardTile (rebuilt each render of GameBoard3D)
+let SPECIAL_TILES = new Set<number>();

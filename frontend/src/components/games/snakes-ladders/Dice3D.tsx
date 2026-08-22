@@ -5,41 +5,121 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { motion } from 'framer-motion';
 
+type FaceValue = 1 | 2 | 3 | 4 | 5 | 6;
+
+// Normalized pip coordinates in [-0.32..0.32], laid out on each face plane.
+const PIP_LAYOUTS: Record<FaceValue, [number, number][]> = {
+  1: [[0, 0]],
+  2: [
+    [-0.32, -0.32],
+    [0.32, 0.32],
+  ],
+  3: [
+    [-0.32, -0.32],
+    [0, 0],
+    [0.32, 0.32],
+  ],
+  4: [
+    [-0.32, -0.32],
+    [0.32, -0.32],
+    [-0.32, 0.32],
+    [0.32, 0.32],
+  ],
+  5: [
+    [-0.32, -0.32],
+    [0.32, -0.32],
+    [0, 0],
+    [-0.32, 0.32],
+    [0.32, 0.32],
+  ],
+  6: [
+    [-0.32, -0.32],
+    [0.32, -0.32],
+    [-0.32, 0],
+    [0.32, 0],
+    [-0.32, 0.32],
+    [0.32, 0.32],
+  ],
+};
+
+// Face placement: plane offset 0.01 outside the cube surface (half of 1.4 = 0.7),
+// rotated so the plane's +Z normal points outward. Opposite faces sum to 7:
+// +Y=1 / -Y=6, +X=2 / -X=5, +Z=3 / -Z=4.
+const FACES: {
+  value: FaceValue;
+  position: [number, number, number];
+  rotation: [number, number, number];
+}[] = [
+  { value: 1, position: [0, 0.71, 0], rotation: [-Math.PI / 2, 0, 0] },
+  { value: 6, position: [0, -0.71, 0], rotation: [Math.PI / 2, 0, 0] },
+  { value: 2, position: [0.71, 0, 0], rotation: [0, Math.PI / 2, 0] },
+  { value: 5, position: [-0.71, 0, 0], rotation: [0, -Math.PI / 2, 0] },
+  { value: 3, position: [0, 0, 0.71], rotation: [0, 0, 0] },
+  { value: 4, position: [0, 0, -0.71], rotation: [0, Math.PI, 0] },
+];
+
+// Rotation [rx, ry] that turns each face's normal toward the camera (+Z).
+const TARGET_ROTATIONS: Record<FaceValue, [number, number]> = {
+  1: [Math.PI / 2, 0],
+  6: [-Math.PI / 2, 0],
+  2: [0, -Math.PI / 2],
+  5: [0, Math.PI / 2],
+  3: [0, 0],
+  4: [0, Math.PI],
+};
+
+const TWO_PI = Math.PI * 2;
+const DAMP_LAMBDA = 8; // settles in ~0.4s
+
+// Shortest-path target: nearest full-turn equivalent of the target angle.
+function nearestTurn(current: number, target: number): number {
+  return target + Math.round((current - target) / TWO_PI) * TWO_PI;
+}
+
 function DiceModel({ value, rolling }: { value: number; rolling: boolean }) {
   const groupRef = useRef<THREE.Group>(null);
 
   useFrame((_, delta) => {
-    if (rolling && groupRef.current) {
-      groupRef.current.rotation.x += delta * 5;
-      groupRef.current.rotation.y += delta * 7;
-      groupRef.current.rotation.z += delta * 3;
+    const group = groupRef.current;
+    if (!group) return;
+    if (rolling) {
+      group.rotation.x += delta * 6;
+      group.rotation.y += delta * 8;
+    } else {
+      const [tx, ty] = TARGET_ROTATIONS[(value as FaceValue) in TARGET_ROTATIONS ? (value as FaceValue) : 3];
+      const factor = 1 - Math.exp(-DAMP_LAMBDA * delta);
+      group.rotation.x += (nearestTurn(group.rotation.x, tx) - group.rotation.x) * factor;
+      group.rotation.y += (nearestTurn(group.rotation.y, ty) - group.rotation.y) * factor;
     }
   });
 
-  // Map value to cube face rotation
-  const rotations: Record<number, [number, number, number]> = {
-    1: [0, 0, 0],
-    2: [0, Math.PI / 2, 0],
-    3: [-Math.PI / 2, 0, 0],
-    4: [Math.PI / 2, 0, 0],
-    5: [0, -Math.PI / 2, 0],
-    6: [Math.PI, 0, 0],
-  };
-
-  const targetRotation = rolling ? [0, 0, 0] : rotations[value] || [0, 0, 0];
-
   return (
-    <group ref={groupRef} rotation={targetRotation as [number, number, number]}>
+    <group ref={groupRef}>
       {/* Cube body */}
       <mesh>
-        <boxGeometry args={[1, 1, 1]} />
-        <meshStandardMaterial color="#FF9BB5" transparent opacity={0.3} />
+        <boxGeometry args={[1.4, 1.4, 1.4]} />
+        <meshStandardMaterial
+          color="#FFF8F0"
+          roughness={0.35}
+          emissive="#FFE4EC"
+          emissiveIntensity={0.15}
+        />
       </mesh>
-      {/* Cube edges */}
-      <lineSegments>
-        <edgesGeometry args={[new THREE.BoxGeometry(1, 1, 1)]} />
-        <lineBasicMaterial color="#FF9BB5" />
-      </lineSegments>
+      {/* Face planes + pips */}
+      {FACES.map((face) => (
+        <group key={face.value} position={face.position} rotation={face.rotation}>
+          <mesh>
+            <planeGeometry args={[1.4, 1.4]} />
+            <meshStandardMaterial color="#FFF8F0" roughness={0.5} />
+          </mesh>
+          {PIP_LAYOUTS[face.value].map(([px, py], i) => (
+            <mesh key={i} position={[px, py, 0.012]}>
+              <sphereGeometry args={[0.075, 16, 16]} />
+              <meshStandardMaterial color="#4A4A4A" roughness={0.4} />
+            </mesh>
+          ))}
+        </group>
+      ))}
     </group>
   );
 }
@@ -51,12 +131,12 @@ interface Dice3DProps {
   disabled: boolean;
 }
 
-export default function Dice3D({ value, rolling, onRoll, disabled }: Dice3DProps) {
+export default function Dice3D({ value, rolling, onRoll, disabled }: Dice3DProps): JSX.Element {
   return (
     <div className="flex flex-col items-center gap-3">
       <div className="w-24 h-24">
-        <Canvas camera={{ position: [0, 0, 3], fov: 50 }}>
-          <ambientLight intensity={0.5} />
+        <Canvas camera={{ position: [0, 0, 4], fov: 50 }}>
+          <ambientLight intensity={0.6} />
           <pointLight position={[5, 5, 5]} />
           <DiceModel value={value || 1} rolling={rolling} />
         </Canvas>
@@ -64,6 +144,7 @@ export default function Dice3D({ value, rolling, onRoll, disabled }: Dice3DProps
       <motion.button
         whileHover={!disabled ? { scale: 1.1 } : {}}
         whileTap={!disabled ? { scale: 0.9 } : {}}
+        transition={{ type: 'spring', stiffness: 300, damping: 20 }}
         onClick={onRoll}
         disabled={disabled}
         className={`px-6 py-3 bg-primary text-white font-bold rounded-button shadow-soft
