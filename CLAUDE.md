@@ -17,7 +17,9 @@ shared/    → TypeScript types shared between FE and BE
 - **Server-authoritative**: All game logic runs server-side. Client only sends actions and renders state.
 - **State in memory**: No database for MVP. Room & game state lives in Maps on the server.
 - **Realtime**: Socket.io WebSocket for room sync, chat, emoji reactions, game state.
-- **Reconnect**: Player disconnect triggers `leaveRoom` — no automatic state restore (re-join via PIN as new player).
+- **Socket lifecycle (critical)**: The socket is an app-lifetime singleton — `useSocket()` must NOT call `disconnectSocket()` on unmount. Disconnecting during page navigation (landing → `/room/[pin]`) makes the server run `leaveRoom`, ejecting the player from the room they just created ("kode ruang tidak valid" bug).
+- **Navigation recovery**: `/room/[pin]` calls `room:sync { pin }` on mount — server responds with room state via ack callback if the socket is still a member. Do NOT re-add client-side sessionStorage room persistence; it was tried and removed (produces frozen phantom rooms).
+- **Reconnect after tab close**: Player disconnect triggers `leaveRoom` — no automatic state restore (re-join via PIN as new player).
 
 ## Commands
 
@@ -61,10 +63,14 @@ To add a new game:
 | `server/src/games/hangman.ts` | Hangman — co-op mode, `'team'` winner on success, `'none'` on loss |
 | `server/src/games/sea-battle.ts` | Sea Battle — 1v1, requires `state.phase === 'playing'` guard in `fire` |
 | `frontend/src/lib/socket.ts` | Singleton socket client |
-| `frontend/src/hooks/useSocket.ts` | `useSocket()` hook |
-| `frontend/src/hooks/useRoom.ts` | `useRoom()` hook — room state + actions |
+| `frontend/src/hooks/useSocket.ts` | `useSocket()` hook — never disconnects on unmount |
+| `frontend/src/hooks/useRoom.ts` | `useRoom()` hook — room state + actions + `syncRoom()` |
 | `frontend/src/app/room/[pin]/page.tsx` | Room lobby + game container switch |
-| `frontend/src/components/games/snakes-ladders/GameBoard3D.tsx` | R3F isometric 3D board |
+| `frontend/src/components/games/snakes-ladders/GameBoard3D.tsx` | R3F isometric board — tiles, pawns (hop/glide animation) |
+| `frontend/src/components/games/snakes-ladders/boardUtils.ts` | Board geometry — `tileToWorld()` zigzag mapping, `tileColor()` |
+| `frontend/src/components/games/snakes-ladders/SnakeModel.tsx` | Segmented 3D snake (Catmull-Rom curve, eyes, tongue) |
+| `frontend/src/components/games/snakes-ladders/LadderModel.tsx` | Wooden ladder (2 rails + rungs) |
+| `frontend/src/components/games/snakes-ladders/Dice3D.tsx` | Pip-face 3D die with spin→damp landing |
 | `shared/types.ts` | All shared types — Room, Player, socket events, game states |
 
 ## Design Constraints
@@ -84,6 +90,16 @@ To add a new game:
 - Snake/Ladder tile indices are 0-99 (not 1-100). Ladder `[80, 99]` not `[80, 100]`. Win at `position >= 99`.
 - Bounce-back on overshoot uses `99 - (newPos - 99)`.
 - Ladder check must use `player.position` (post-snake) not `newPos` (pre-snake) — bug-fix history in `progress.md`.
+- 3D board geometry: ALL tile→world positioning goes through `boardUtils.ts` `tileToWorld()` — board is boustrophedon (odd rows run right-to-left). Never compute tile coordinates inline with `(col - 4.5) * ...` formulas; they ignore zigzag.
+- Pawn movement: |Δposition| > 6 means snake/ladder → glide arc animation; ≤ 6 → tile-by-tile hop. Threshold equals max dice value.
+- Windows/Git Bash: `taskkill /PID x /F` fails directly in Git Bash — use `echo "taskkill /PID x /F" | cmd`. Stale `next dev` processes holding port 3000 are a recurring issue after crashes; check `netstat -ano | grep :3000` and kill the PID.
+- Corrupted `.next` cache after large refactors (`Cannot find module './vendor-chunks/...'`): delete `frontend/.next/` and restart dev server.
+
+## Documentation
+
+- Spec: `docs/superpowers/specs/2026-07-29-multiplayer-web-game-design.md`
+- Plan: `docs/superpowers/plans/2026-07-29-multiplayer-web-game-implementation.md`
+- SDD ledger: `.superpowers/sdd/2026-07-29-multiplayer-web-game-implementation/progress.md` (track record of every task + fix round)
 
 ## Documentation
 
