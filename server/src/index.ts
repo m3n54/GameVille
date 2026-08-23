@@ -8,6 +8,7 @@ import { BaseGame, GameInstance } from './games/base';
 import { SnakesLaddersEngine } from './games/snakes-ladders';
 import { HangmanEngine } from './games/hangman';
 import { SeaBattleEngine } from './games/sea-battle';
+import { MinesweeperEngine, toView } from './games/minesweeper';
 
 const GAMES = new Map<string, GameInstance>();
 
@@ -15,7 +16,15 @@ const engines: Record<string, BaseGame> = {
   'snakes-ladders': new SnakesLaddersEngine(),
   'hangman': new HangmanEngine(),
   'sea-battle': new SeaBattleEngine(),
+  'minesweeper': new MinesweeperEngine(),
 };
+
+// Anti-cheat: minesweeper clients must never receive the raw grid (hasBomb leaks).
+// Everything that emits game state goes through this projection.
+function stateForClient(gameType: string, state: unknown): unknown {
+  if (gameType === 'minesweeper') return toView(state as Parameters<typeof toView>[0]);
+  return state;
+}
 
 const corsOrigin = (process.env.CORS_ORIGIN || 'http://localhost:3000')
   .split(',')
@@ -117,7 +126,7 @@ io.on('connection', (socket) => {
 
     // Notify all players
     io.to(roomData.id).emit('game:started', roomData.gameType!);
-    io.to(roomData.id).emit('game:state', instance.state);
+    io.to(roomData.id).emit('game:state', stateForClient(instance.gameType, instance.state));
 
     // Notify whose turn it is
     const currentPlayerId = instance.playerOrder[instance.currentTurnIndex];
@@ -152,20 +161,25 @@ io.on('connection', (socket) => {
     for (const event of result.events) {
       switch (event.type) {
         case 'diceResult':
-          io.to(gameRoom.id).emit('game:state', instance.state);
+          io.to(gameRoom.id).emit('game:state', stateForClient(instance.gameType, instance.state));
           io.to(gameRoom.id).emit('game:action', event.data);
+          break;
+        case 'revealResult':
+        case 'flagToggled':
+          io.to(gameRoom.id).emit('game:state', stateForClient(instance.gameType, instance.state));
+          io.to(gameRoom.id).emit('game:action', { type: event.type, ...event.data });
           break;
         case 'correctGuess':
         case 'wrongGuess':
-          io.to(gameRoom.id).emit('game:state', instance.state);
+          io.to(gameRoom.id).emit('game:state', stateForClient(instance.gameType, instance.state));
           io.to(gameRoom.id).emit('game:action', { type: event.type, ...event.data });
           break;
         case 'turnChange':
-          io.to(gameRoom.id).emit('game:state', instance.state);
+          io.to(gameRoom.id).emit('game:state', stateForClient(instance.gameType, instance.state));
           io.to(gameRoom.id).emit('game:action', { type: 'turn', ...event.data });
           break;
         case 'gameOver':
-          io.to(gameRoom.id).emit('game:state', instance.state);
+          io.to(gameRoom.id).emit('game:state', stateForClient(instance.gameType, instance.state));
           const wId = event.data.winnerId as string;
           let winnerName = 'Unknown';
           if (wId === 'team') {
@@ -181,15 +195,20 @@ io.on('connection', (socket) => {
           break;
         case 'fireResult':
           socket.emit('game:action', { type: 'fireResult', ...event.data });
-          io.to(gameRoom.id).emit('game:state', instance.state);
+          io.to(gameRoom.id).emit('game:state', stateForClient(instance.gameType, instance.state));
           break;
         case 'gameStart':
-          io.to(gameRoom.id).emit('game:state', instance.state);
-          io.to(gameRoom.id).emit('game:action', { type: 'gameStart', firstTurn: event.data.firstTurn });
-          io.to(gameRoom.id).emit('game:action', { type: 'turn', nextPlayerId: event.data.firstTurn });
+          // Minesweeper config uses firstTurnId; sea battle uses firstTurn — pass both through
+          io.to(gameRoom.id).emit('game:state', stateForClient(instance.gameType, instance.state));
+          io.to(gameRoom.id).emit('game:action', { type: 'gameStart', firstTurn: event.data.firstTurn, firstTurnId: event.data.firstTurnId });
+          if (event.data.firstTurn) {
+            io.to(gameRoom.id).emit('game:action', { type: 'turn', nextPlayerId: event.data.firstTurn });
+          } else if (event.data.firstTurnId) {
+            io.to(gameRoom.id).emit('game:action', { type: 'turn', nextPlayerId: event.data.firstTurnId });
+          }
           break;
         case 'shipsPlaced':
-          io.to(gameRoom.id).emit('game:state', instance.state);
+          io.to(gameRoom.id).emit('game:state', stateForClient(instance.gameType, instance.state));
           break;
         case 'error':
           socket.emit('room:error', event.data as { message: string });

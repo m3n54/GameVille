@@ -13,17 +13,26 @@ import EmojiReactions from '@/components/room/EmojiReactions';
 import SnakesLaddersContainer from '@/components/games/snakes-ladders/SnakesLaddersContainer';
 import HangmanContainer from '@/components/games/hangman/HangmanContainer';
 import SeaBattleContainer from '@/components/games/sea-battle/SeaBattleContainer';
-import type { GameType, SnakesLaddersState, HangmanState, SeaBattleState } from '@/types';
+import MinesweeperContainer from '@/components/games/minesweeper/MinesweeperContainer';
+import type { GameType, SnakesLaddersState, HangmanState, SeaBattleState, MinesweeperView } from '@/types';
 
 export default function RoomPage() {
   const params = useParams();
   const pin = params.pin as string;
   const { socket, connected } = useSocket();
-  const { room, players, leaveRoom, toggleReady, selectGame, startGame } = useRoom(socket);
+  const { room, players, leaveRoom, toggleReady, selectGame, startGame, syncRoom } = useRoom(socket);
   const myId = socket?.id;
   const [gameState, setGameState] = useState<unknown>(null);
   const [gameActive, setGameActive] = useState(false);
   const [gameWinner, setGameWinner] = useState<{ id: string; name: string } | null>(null);
+
+  // After navigation the component is fresh — ask the server for room state
+  useEffect(() => {
+    if (!socket || !connected) return;
+    if (!room) {
+      syncRoom(pin);
+    }
+  }, [socket, connected, pin, room, syncRoom]);
 
   useEffect(() => {
     if (!socket) return;
@@ -70,6 +79,8 @@ export default function RoomPage() {
           return <HangmanContainer socket={socket!} state={gameState as HangmanState} />;
         case 'sea-battle':
           return <SeaBattleContainer socket={socket!} state={gameState as SeaBattleState} />;
+        case 'minesweeper':
+          return <MinesweeperContainer socket={socket!} state={gameState as MinesweeperView} />;
         default:
           return <p>Game tidak dikenal</p>;
       }
@@ -138,7 +149,7 @@ export default function RoomPage() {
 
             <Card title="🎯 Pilih Game">
               <div className="space-y-3">
-                {(['snakes-ladders', 'hangman', 'sea-battle'] as GameType[]).map((g) => (
+                {(['snakes-ladders', 'hangman', 'sea-battle', 'minesweeper'] as GameType[]).map((g) => (
                   <button
                     key={g}
                     onClick={() => isHost && selectGame(g)}
@@ -150,10 +161,10 @@ export default function RoomPage() {
                     } ${!isHost ? 'opacity-60' : ''}`}
                   >
                     <p className="font-bold text-cute-text">
-                      {g === 'snakes-ladders' ? '🐍 Ular Tangga' : g === 'hangman' ? '💀 Hangman' : '⚓ Sea Battle'}
+                      {g === 'snakes-ladders' ? '🐍 Ular Tangga' : g === 'hangman' ? '💀 Hangman' : g === 'sea-battle' ? '⚓ Sea Battle' : '💣 Minesweeper'}
                     </p>
                     <p className="text-sm text-cute-muted">
-                      {g === 'snakes-ladders' ? '2-4 pemain · Dadu 3D · Papan isometric' : g === 'hangman' ? '2-4 pemain · Tebak kata bareng-bareng' : '2 pemain · Perang kapal di grid'}
+                      {g === 'snakes-ladders' ? '2-4 pemain · Dadu 3D · Papan isometric' : g === 'hangman' ? '2-4 pemain · Tebak kata bareng-bareng' : g === 'sea-battle' ? '2 pemain · Perang kapal di grid' : '2 pemain · Co-op · Hindari bom bareng'}
                     </p>
                   </button>
                 ))}
