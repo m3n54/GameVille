@@ -126,6 +126,7 @@ export interface MinesweeperState {
 export interface MinesweeperView {
   difficulty: MinesweeperDifficulty;
   mode: MinesweeperMode;
+  phase: 'config' | 'playing';
   rows: number;
   cols: number;
   bombCount: number;

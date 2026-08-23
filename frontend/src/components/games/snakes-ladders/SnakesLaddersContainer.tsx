@@ -14,7 +14,7 @@ interface Props {
 
 interface GameAction {
   type: string;
-  playerId?: string;
+  nextPlayerId?: string;
   message?: string;
 }
 
@@ -35,7 +35,7 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
     const handleAction = (data: unknown) => {
       const action = data as GameAction;
       if (action.type === 'turn') {
-        if (action.playerId === myId) {
+        if (action.nextPlayerId === myId) {
           setMessage('Giliranmu! Lempar dadu! 🎲');
         } else {
           setMessage('Menunggu giliran pemain lain...');

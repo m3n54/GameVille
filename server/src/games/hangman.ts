@@ -1,6 +1,18 @@
 import { BaseGame, GameEvent } from './base';
 import { GameType, HangmanState } from '../types';
 
+// Client-facing projection — the secret word must never reach clients while playing
+export type HangmanView = HangmanState & { playerOrder: string[] };
+
+export function toHangmanView(state: HangmanState & { word: string; playerOrder: string[] }): HangmanView {
+  if (state.winner) {
+    // Game over — reveal the answer
+    return { ...state, word: state.word } as HangmanView & { word: string };
+  }
+  const { word, ...rest } = state;
+  return rest as HangmanView;
+}
+
 const WORDS: Record<string, string[]> = {
   'Hewan': ['GAJAH', 'KUCING', 'KELINCI', 'SINGA', 'HARIMAU', 'BURUNG', 'IKAN', 'ULAR', 'KAMBING', 'SAPI'],
   'Buah': ['APEL', 'MANGGA', 'PISANG', 'JERUK', 'ANGGUR', 'SEMANGKA', 'NANAS', 'PEPAYA', 'DURIAN', 'RAMBUTAN'],

@@ -8,7 +8,7 @@ import type { HangmanState, ServerToClientEvents, ClientToServerEvents } from '@
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
-// Runtime state from server includes extra fields beyond the shared type
+// Runtime state from server: projected view (word hidden until game over, playerOrder included)
 type RuntimeHangmanState = HangmanState & {
   word?: string;
   playerOrder?: string[];
@@ -25,6 +25,8 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
   );
   const [message, setMessage] = useState('');
   const [flashLetter, setFlashLetter] = useState<{ letter: string; ok: boolean } | null>(null);
+  // Server state projection has no playerOrder — track whose turn via events
+  const [currentPlayerId, setCurrentPlayerId] = useState<string | null>(null);
   const myId = socket.id;
 
   // Sync server state
@@ -49,16 +51,20 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
       const action = data as {
         type: string;
         nextPlayerId?: string;
+        firstTurn?: string;
         letter?: string;
         message?: string;
       };
 
       if (action.type === 'turn') {
+        setCurrentPlayerId(action.nextPlayerId ?? null);
         if (action.nextPlayerId === myId) {
           setMessage('Giliranmu! Tebak satu huruf');
         } else {
           setMessage('Giliran pemain lain...');
         }
+      } else if (action.type === 'gameStart') {
+        setCurrentPlayerId(action.firstTurn ?? null);
       } else if (action.type === 'correctGuess' && action.letter) {
         setFlashLetter({ letter: action.letter, ok: true });
         window.setTimeout(() => setFlashLetter(null), 700);
@@ -105,10 +111,9 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
     );
   }
 
-  const playerOrder = gameState.playerOrder ?? [];
-  const isMyTurn = playerOrder.length > 0
-    ? playerOrder[gameState.currentTurn] === myId
-    : true;
+  // Unknown current player (e.g. before first turn event arrives) → optimistic;
+  // server remains authoritative anyway
+  const isMyTurn = currentPlayerId == null || currentPlayerId === myId;
   const isOver = gameState.winner != null;
   const guessedLetters = gameState.guessedLetters || [];
   const correctLetters = gameState.correctLetters || [];
@@ -166,7 +171,7 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
           </p>
 
           {/* Debug: turn indicator */}
-          {!isOver && playerOrder.length > 0 && (
+          {!isOver && currentPlayerId != null && (
             <p className="text-center text-xs text-cute-muted">
               Giliran: {isMyTurn ? 'kamu' : 'pemain lain'}
             </p>

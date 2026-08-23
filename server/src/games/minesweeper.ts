@@ -293,6 +293,7 @@ export function toView(state: MinesweeperExtendedState): MinesweeperView {
   return {
     difficulty: state.difficulty,
     mode: state.mode,
+    phase: state.phase,
     rows: state.rows,
     cols: state.cols,
     bombCount: state.bombCount,

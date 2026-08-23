@@ -132,8 +132,8 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
     sendAction('config', { difficulty, mode });
   }, [sendAction, difficulty, mode]);
 
-  // === Config phase — board not generated yet (rows === 0) ===
-  if (!view || view.rows === 0 || !view.cells) {
+  // === Config phase — server starts in phase 'config' with empty cells ===
+  if (!view || view.phase === 'config' || !view.cells || view.cells.length === 0) {
     return (
       <div className="max-w-md mx-auto space-y-6 text-center">
         <p className="text-2xl">💣</p>
@@ -186,14 +186,6 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
         >
           Mulai Papan
         </motion.button>
-      </div>
-    );
-  }
-
-  if (view.cells.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <p className="text-cute-muted text-xl">Memuat papan...</p>
       </div>
     );
   }

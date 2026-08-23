@@ -9,6 +9,7 @@ import { SnakesLaddersEngine } from './games/snakes-ladders';
 import { HangmanEngine } from './games/hangman';
 import { SeaBattleEngine } from './games/sea-battle';
 import { MinesweeperEngine, toView } from './games/minesweeper';
+import { toHangmanView } from './games/hangman';
 
 const GAMES = new Map<string, GameInstance>();
 
@@ -19,10 +20,12 @@ const engines: Record<string, BaseGame> = {
   'minesweeper': new MinesweeperEngine(),
 };
 
-// Anti-cheat: minesweeper clients must never receive the raw grid (hasBomb leaks).
+// Anti-cheat: minesweeper clients must never receive the raw grid (hasBomb leaks);
+// hangman clients must never receive the secret word until game over.
 // Everything that emits game state goes through this projection.
 function stateForClient(gameType: string, state: unknown): unknown {
   if (gameType === 'minesweeper') return toView(state as Parameters<typeof toView>[0]);
+  if (gameType === 'hangman') return toHangmanView(state as Parameters<typeof toHangmanView>[0]);
   return state;
 }
 
@@ -130,7 +133,7 @@ io.on('connection', (socket) => {
 
     // Notify whose turn it is
     const currentPlayerId = instance.playerOrder[instance.currentTurnIndex];
-    io.to(roomData.id).emit('game:action', { type: 'turn', playerId: currentPlayerId });
+    io.to(roomData.id).emit('game:action', { type: 'turn', nextPlayerId: currentPlayerId });
   });
 
   socket.on('game:action', (data) => {
