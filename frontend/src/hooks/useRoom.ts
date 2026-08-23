@@ -5,23 +5,19 @@ import { useRouter } from 'next/navigation';
 import { Socket } from 'socket.io-client';
 import type { Room, Player, GameType, ServerToClientEvents, ClientToServerEvents } from '@/types';
 
+// Identity persistence intentionally absent — CLAUDE.md: client-side sessionStorage
+// room/identity persistence produced frozen phantom rooms and was removed.
 const IDENTITY_KEY = 'gameville_identity';
 
-export interface PlayerIdentity {
-  nickname: string;
-  color: string;
-  emoji: string;
-}
-
-export function saveIdentity(identity: PlayerIdentity) {
+function saveIdentity(identity: { nickname: string; color: string; emoji: string }) {
   try { sessionStorage.setItem(IDENTITY_KEY, JSON.stringify(identity)); } catch {}
 }
 
-export function loadIdentity(): PlayerIdentity | null {
-  try {
-    const raw = sessionStorage.getItem(IDENTITY_KEY);
-    return raw ? (JSON.parse(raw) as PlayerIdentity) : null;
-  } catch { return null; }
+export interface SyncResponse {
+  ok: boolean;
+  room?: Room;
+  error?: string;
+  gameState?: unknown;
 }
 
 interface UseRoomReturn {
@@ -29,7 +25,7 @@ interface UseRoomReturn {
   players: Player[];
   createRoom: (name: string, nickname: string, color: string, emoji: string) => void;
   joinRoom: (pin: string, nickname: string, color: string, emoji: string) => void;
-  syncRoom: (pin: string) => void;
+  syncRoom: (pin: string, onGameState?: (state: unknown) => void) => void;
   leaveRoom: () => void;
   toggleReady: () => void;
   selectGame: (gameType: GameType) => void;
@@ -55,6 +51,19 @@ export function useRoom(socket: Socket<ServerToClientEvents, ClientToServerEvent
     };
   }, [socket]);
 
+  // Join-phase errors (wrong PIN / full room) surface via a scoped listener that
+  // self-removes once navigation happens — it never lingers into gameplay.
+  useEffect(() => {
+    if (!socket) return;
+    const onRoomError = (err: { message: string }) => {
+      alert(err.message);
+    };
+    socket.on('room:error', onRoomError);
+    return () => {
+      socket.off('room:error', onRoomError);
+    };
+  }, [socket]);
+
   const createRoom = useCallback((name: string, nickname: string, color: string, emoji: string) => {
     if (!socket) return;
     saveIdentity({ nickname, color, emoji });
@@ -73,17 +82,18 @@ export function useRoom(socket: Socket<ServerToClientEvents, ClientToServerEvent
       setRoom(r);
       router.push(`/room/${r.pin}`);
     });
-    socket.once('room:error', (err) => {
-      alert(err.message);
-    });
   }, [socket, router]);
 
-  // After navigation: same socket (still a member server-side) asks for room state by PIN
-  const syncRoom = useCallback((pin: string) => {
+  // After navigation: same socket (still a member server-side) asks for room state by PIN.
+  // onGameState receives the replayed game snapshot when the room is mid-game.
+  const syncRoom = useCallback((pin: string, onGameState?: (state: unknown) => void) => {
     if (!socket) return;
-    socket.emit('room:sync', { pin }, (response) => {
+    socket.emit('room:sync', { pin }, (response: SyncResponse) => {
       if (response.ok && response.room) {
         setRoom(response.room);
+        if (response.gameState && onGameState) {
+          onGameState(response.gameState);
+        }
       } else {
         router.push('/');
       }

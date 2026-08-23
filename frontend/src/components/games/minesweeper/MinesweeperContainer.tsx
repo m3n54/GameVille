@@ -93,8 +93,17 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
     };
 
     socket.on('game:action', handleAction);
+
+    // Engine errors (wrong turn, flag on revealed) arrive as room:error
+    const handleError = (err: { message: string }) => {
+      setMessage(`⚠️ ${err.message}`);
+      window.setTimeout(() => setMessage(''), 2500);
+    };
+    socket.on('room:error', handleError);
+
     return () => {
       socket.off('game:action', handleAction);
+      socket.off('room:error', handleError);
     };
   }, [socket, myId, view?.winner]);
 

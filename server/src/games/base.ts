@@ -32,6 +32,14 @@ export abstract class BaseGame {
   nextTurn(instance: GameInstance): void {
     instance.currentTurnIndex = (instance.currentTurnIndex + 1) % instance.playerOrder.length;
   }
+
+  // Remove a disconnected player from the live game. Engines with richer state
+  // (players array, turn rotation) override this; default only prunes playerOrder.
+  removePlayer(state: unknown, playerId: string): { playerOrder: string[]; gameOver?: boolean } {
+    const s = state as { winner?: unknown };
+    if (s.winner) return { playerOrder: [], gameOver: false };
+    return { playerOrder: [], gameOver: false };
+  }
 }
 
 export interface GameEvent {

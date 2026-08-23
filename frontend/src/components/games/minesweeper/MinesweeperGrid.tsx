@@ -55,11 +55,13 @@ export default function MinesweeperGrid({
       {view.cells.map((rowCells, row) => (
         <div key={row} className="flex">
           {rowCells.map((cell, col) => {
-            // Boom cell (the one clicked) — server sends exploded flag
-            const isBoom = cell.exploded === true;
-            // Revealed safe cell with neighbors shows its digit
+            // exploded:true = the bomb that was clicked (💥); after a loss the
+            // server also uncovers remaining bombs as revealed cells → 💣
+            const isBoomClick = cell.exploded === true;
+            const isOtherBomb = gameOver && !isBoomClick && cell.state === 'revealed'
+              && cell.adjacent === -1;
             const showDigit =
-              !isBoom && cell.state === 'revealed' && cell.adjacent > 0;
+              !isBoomClick && !isOtherBomb && cell.state === 'revealed' && cell.adjacent > 0;
             const hidden = cell.state === 'hidden';
             const flagged = cell.state === 'flagged';
             return (
@@ -79,8 +81,10 @@ export default function MinesweeperGrid({
                       : 'bg-white cursor-default'
                 }`}
               >
-                {isBoom ? (
+                {isBoomClick ? (
                   <span>💥</span>
+                ) : isOtherBomb ? (
+                  <span>💣</span>
                 ) : flagged ? (
                   <span>🚩</span>
                 ) : showDigit ? (

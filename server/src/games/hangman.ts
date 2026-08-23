@@ -4,57 +4,87 @@ import { GameType, HangmanState } from '../types';
 // Client-facing projection — the secret word must never reach clients while playing
 export type HangmanView = HangmanState & { playerOrder: string[] };
 
-export function toHangmanView(state: HangmanState & { word: string; playerOrder: string[] }): HangmanView {
+export function toHangmanView(state: HangmanExtendedState): HangmanView {
   if (state.winner) {
     // Game over — reveal the answer
-    return { ...state, word: state.word } as HangmanView & { word: string };
+    return state as HangmanView;
   }
   const { word, ...rest } = state;
+  void word;
   return rest as HangmanView;
 }
 
-const WORDS: Record<string, string[]> = {
-  'Hewan': ['GAJAH', 'KUCING', 'KELINCI', 'SINGA', 'HARIMAU', 'BURUNG', 'IKAN', 'ULAR', 'KAMBING', 'SAPI'],
-  'Buah': ['APEL', 'MANGGA', 'PISANG', 'JERUK', 'ANGGUR', 'SEMANGKA', 'NANAS', 'PEPAYA', 'DURIAN', 'RAMBUTAN'],
-  'Negara': ['INDONESIA', 'MALAYSIA', 'JEPANG', 'KOREA', 'INGGRIS', 'PRANCIS', 'MESIR', 'AUSTRALIA', 'BRAZIL', 'THAILAND'],
+const WORDS: Record<'id' | 'en', Record<string, string[]>> = {
+  id: {
+    'Hewan': ['GAJAH', 'KUCING', 'KELINCI', 'SINGA', 'HARIMAU', 'BURUNG', 'IKAN', 'ULAR', 'KAMBING', 'SAPI'],
+    'Buah': ['APEL', 'MANGGA', 'PISANG', 'JERUK', 'ANGGUR', 'SEMANGKA', 'NANAS', 'PEPAYA', 'DURIAN', 'RAMBUTAN'],
+    'Negara': ['INDONESIA', 'MALAYSIA', 'JEPANG', 'KOREA', 'INGGRIS', 'PRANCIS', 'MESIR', 'AUSTRALIA', 'BRAZIL', 'THAILAND'],
+  },
+  en: {
+    'Animal': ['ELEPHANT', 'CAT', 'RABBIT', 'LION', 'TIGER', 'BIRD', 'FISH', 'SNAKE', 'GOAT', 'COW'],
+    'Fruit': ['APPLE', 'MANGO', 'BANANA', 'ORANGE', 'GRAPE', 'WATERMELON', 'PINEAPPLE', 'PAPAYA', 'DURIAN', 'RAMBUTAN'],
+    'Country': ['INDONESIA', 'MALAYSIA', 'JAPAN', 'KOREA', 'ENGLAND', 'FRANCE', 'EGYPT', 'AUSTRALIA', 'BRAZIL', 'THAILAND'],
+  },
 };
 
 const MAX_ATTEMPTS = 6;
 
+// Config-phase state before the host picks a language
+export type HangmanExtendedState = HangmanState & { word: string; playerOrder: string[] };
+
 export class HangmanEngine extends BaseGame {
   gameType: GameType = 'hangman';
 
-  // The shared HangmanState type only stores wordLength, but the engine needs
-  // the actual word for win checking. We stash the word on the state via an
-  // extended shape internally; the public state projection below exposes it
-  // so the client can show the answer on game over.
-  createInitialState(playerOrder: string[]): HangmanState & { word: string; playerOrder: string[] } {
-    const categories = Object.keys(WORDS);
-    const category = categories[Math.floor(Math.random() * categories.length)];
-    const words = WORDS[category];
-    const word = words[Math.floor(Math.random() * words.length)];
-
+  // Config-phase initial state — no word yet; host picks language first.
+  createInitialState(playerOrder: string[]): HangmanExtendedState {
     return {
-      word,
+      word: '',
       playerOrder,
-      category,
-      wordLength: word.length,
+      language: 'id',
+      phase: 'config',
+      category: '',
+      wordLength: 0,
       guessedLetters: [],
-      correctLetters: Array(word.length).fill(null),
+      correctLetters: [],
       remainingAttempts: MAX_ATTEMPTS,
       currentTurn: 0,
       winner: null,
-    } as HangmanState & { word: string; playerOrder: string[] };
+    };
   }
 
   handleAction(
-    state: HangmanState & { word: string; playerOrder: string[] },
+    state: HangmanExtendedState,
     playerId: string,
     action: { type: string; payload?: unknown },
-  ): { newState: HangmanState & { word: string; playerOrder: string[] }; events: GameEvent[] } {
+  ): { newState: HangmanExtendedState; events: GameEvent[] } {
     const events: GameEvent[] = [];
 
     if (state.winner) return { newState: state, events: [] };
+
+    if (action.type === 'config') {
+      if (state.phase !== 'config') {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Permainan sudah dimulai!' } }] };
+      }
+      const lang = (action.payload as { language?: string })?.language === 'en' ? 'en' : 'id';
+      state.language = lang;
+      state.phase = 'playing';
+
+      const categories = Object.keys(WORDS[lang]);
+      const category = categories[Math.floor(Math.random() * categories.length)];
+      const words = WORDS[lang][category];
+      const word = words[Math.floor(Math.random() * words.length)];
+      state.word = word;
+      state.category = category;
+      state.wordLength = word.length;
+      state.correctLetters = Array(word.length).fill(null);
+
+      events.push({ type: 'gameStart', data: {} });
+      return { newState: { ...state }, events };
+    }
+
+    if (state.phase !== 'playing') {
+      return { newState: state, events: [] };
+    }
 
     if (action.type === 'guess') {
       // Server-side turn enforcement
@@ -120,5 +150,23 @@ export class HangmanEngine extends BaseGame {
     }
 
     return { newState: { ...state }, events };
+  }
+
+  // Disconnection handling: prune the leaver; with 1 player left the co-op game
+  // continues solo (turn rotation stops, but guessing stays open).
+  removePlayer(
+    state: HangmanExtendedState,
+    playerId: string,
+  ): { playerOrder: string[]; gameOver?: boolean } {
+    if (state.winner) return { playerOrder: state.playerOrder };
+    const idx = state.playerOrder.indexOf(playerId);
+    if (idx === -1) return { playerOrder: state.playerOrder };
+    const next = [...state.playerOrder];
+    next.splice(idx, 1);
+    if (state.currentTurn >= next.length && next.length > 0) {
+      state.currentTurn = 0;
+    }
+    state.playerOrder = next;
+    return { playerOrder: next };
   }
 }

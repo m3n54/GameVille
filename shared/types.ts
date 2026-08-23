@@ -45,7 +45,7 @@ export interface ClientToServerEvents {
   'room:create': (data: { name: string; nickname: string; color: string; emoji: string }) => void;
   'room:join': (data: { pin: string; nickname: string; color: string; emoji: string }) => void;
   'room:leave': () => void;
-  'room:sync': (data: { pin: string }, callback: (response: { ok: boolean; room?: Room; error?: string }) => void) => void;
+  'room:sync': (data: { pin: string }, callback: (response: { ok: boolean; room?: Room; error?: string; gameState?: unknown }) => void) => void;
   'player:ready': (data: { ready: boolean }) => void;
   'game:select': (data: { gameType: GameType }) => void;
   'game:start': () => void;
@@ -68,6 +68,8 @@ export interface SnakesLaddersState {
 
 export interface HangmanState {
   category: string;
+  language: 'id' | 'en';
+  phase: 'config' | 'playing';
   wordLength: number;
   guessedLetters: string[];
   correctLetters: (string | null)[];

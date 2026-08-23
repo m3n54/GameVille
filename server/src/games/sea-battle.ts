@@ -171,4 +171,13 @@ export class SeaBattleEngine extends BaseGame {
 
     return { newState: { ...state }, events };
   }
+
+  // Disconnection handling: sea battle is strictly 1v1 — the remaining player wins by forfeit.
+  removePlayer(state: SeaBattleState, playerId: string): { playerOrder: string[]; gameOver?: boolean } {
+    if (state.winner || state.phase === 'finished') return { playerOrder: [] };
+    const other = playerId === state.player1Id ? state.player2Id : state.player1Id;
+    state.winner = other;
+    state.phase = 'finished';
+    return { playerOrder: [], gameOver: true };
+  }
 }

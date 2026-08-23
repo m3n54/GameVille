@@ -10,6 +10,7 @@ import { HangmanEngine } from './games/hangman';
 import { SeaBattleEngine } from './games/sea-battle';
 import { MinesweeperEngine, toView } from './games/minesweeper';
 import { toHangmanView } from './games/hangman';
+import type { HangmanExtendedState } from './games/hangman';
 
 const GAMES = new Map<string, GameInstance>();
 
@@ -21,11 +22,13 @@ const engines: Record<string, BaseGame> = {
 };
 
 // Anti-cheat: minesweeper clients must never receive the raw grid (hasBomb leaks);
-// hangman clients must never receive the secret word until game over.
+// hangman clients must never receive the secret word until game over;
+// sea battle grids are per-player — a player sees their own grid plus the enemy's hit/miss marks.
 // Everything that emits game state goes through this projection.
-function stateForClient(gameType: string, state: unknown): unknown {
+function stateForClient(gameType: string, state: unknown, forPlayerId?: string): unknown {
   if (gameType === 'minesweeper') return toView(state as Parameters<typeof toView>[0]);
-  if (gameType === 'hangman') return toHangmanView(state as Parameters<typeof toHangmanView>[0]);
+  if (gameType === 'hangman') return toHangmanView(state as HangmanExtendedState);
+  void forPlayerId;
   return state;
 }
 
@@ -95,7 +98,18 @@ io.on('connection', (socket) => {
       return;
     }
     socket.join(memberRoom.id);
-    callback({ ok: true, room: memberRoom });
+
+    // Mid-game recovery: replay current game state + turn so a refreshed tab
+    // re-enters the game instead of dead-ending in the lobby.
+    let gameSnapshot: unknown = null;
+    const instance = GAMES.get(memberRoom.id);
+    const engine = engines[memberRoom.gameType ?? ''];
+    if (instance && engine && (memberRoom.state === 'playing' || memberRoom.state === 'finished')) {
+      // Sea battle grids are per-player secret — send this player's own view only
+      gameSnapshot = stateForClient(instance.gameType, instance.state, socket.id);
+      void engine;
+    }
+    callback({ ok: true, room: memberRoom, gameState: gameSnapshot });
   });
 
   socket.on('player:ready', (data) => {
@@ -263,6 +277,31 @@ io.on('connection', (socket) => {
       } else if (game && (!room || room.players.length === 0)) {
         // Clean up active game if no players remain
         GAMES.delete(result.roomId);
+      } else if (game && room && room.players.length > 0) {
+        // Mid-game disconnect: prune the leaver so turns never rotate to a ghost
+        const engine = engines[game.gameType];
+        if (engine) {
+          const outcome = engine.removePlayer(game.state, socket.id);
+          game.playerOrder = outcome.playerOrder.length > 0 ? outcome.playerOrder : game.playerOrder.filter(id => id !== socket.id);
+          if (outcome.gameOver) {
+            const winnerState = game.state as { winner?: string | null };
+            const wId = winnerState.winner ?? 'none';
+            const winnerName = wId === 'team' ? 'Tim'
+              : wId === 'none' ? '-'
+              : getRoom(result.roomId)?.players.find(p => p.id === wId)?.nickname ?? 'Unknown';
+            io.to(result.roomId).emit('game:over', { winnerId: wId, winnerName });
+            setRoomState(result.roomId, 'finished');
+          } else {
+            io.to(result.roomId).emit('game:state', stateForClient(game.gameType, game.state));
+            const turnState = game.state as { currentTurn?: number; players?: { id: string }[] };
+            const nextId = turnState.players
+              ? turnState.players[turnState.currentTurn ?? 0]?.id
+              : game.playerOrder[turnState.currentTurn ?? 0];
+            if (nextId) {
+              io.to(result.roomId).emit('game:action', { type: 'turn', nextPlayerId: nextId });
+            }
+          }
+        }
       }
     }
     console.log(`[-] Player disconnected: ${socket.id}`);

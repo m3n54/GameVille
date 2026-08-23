@@ -14,6 +14,26 @@ const LADDERS: [number, number][] = [
 export class SnakesLaddersEngine extends BaseGame {
   gameType: GameType = 'snakes-ladders';
 
+  // Disconnection handling: prune the leaver from the players array so the turn
+  // never rotates to a ghost. Last player standing wins by forfeit.
+  removePlayer(state: SnakesLaddersState, playerId: string): { playerOrder: string[]; gameOver?: boolean } {
+    if (state.winner) return { playerOrder: state.players.map(p => p.id) };
+    const idx = state.players.findIndex(p => p.id === playerId);
+    if (idx === -1) return { playerOrder: state.players.map(p => p.id) };
+    if (state.players.length <= 2) {
+      // 1v1 or last-two: remaining player wins
+      state.winner = state.players.find(p => p.id !== playerId)?.id ?? null;
+      return { playerOrder: [], gameOver: true };
+    }
+    state.players.splice(idx, 1);
+    if (state.currentTurn > idx) {
+      state.currentTurn -= 1;
+    } else if (state.currentTurn >= state.players.length) {
+      state.currentTurn = 0;
+    }
+    return { playerOrder: state.players.map(p => p.id) };
+  }
+
   createInitialState(playerOrder: string[]): SnakesLaddersState {
     const colors = ['#FF6B6B', '#4ECDC4', '#FFE66D', '#95E1D3'];
     return {

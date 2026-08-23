@@ -19,6 +19,8 @@ interface Props {
   state: HangmanState | null;
 }
 
+type Lang = 'id' | 'en';
+
 export default function HangmanContainer({ socket, state: initial }: Props) {
   const [gameState, setGameState] = useState<RuntimeHangmanState | null>(
     initial as RuntimeHangmanState | null,
@@ -27,7 +29,12 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
   const [flashLetter, setFlashLetter] = useState<{ letter: string; ok: boolean } | null>(null);
   // Server state projection has no playerOrder — track whose turn via events
   const [currentPlayerId, setCurrentPlayerId] = useState<string | null>(null);
+  const [language, setLanguage] = useState<Lang>('id');
   const myId = socket.id;
+
+  const sendConfig = useCallback(() => {
+    socket.emit('game:action', { type: 'config', payload: { language } });
+  }, [socket, language]);
 
   // Sync server state
   useEffect(() => {
@@ -75,8 +82,14 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
     };
 
     socket.on('game:action', handleAction);
+
+    // Engine errors (wrong turn, already-guessed) arrive as room:error
+    const handleError = (err: { message: string }) => setMessage(`⚠️ ${err.message}`);
+    socket.on('room:error', handleError);
+
     return () => {
       socket.off('game:action', handleAction);
+      socket.off('room:error', handleError);
     };
   }, [socket, myId]);
 
@@ -93,7 +106,7 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
   // Keyboard support
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!gameState) return;
+      if (!gameState || gameState.phase === 'config') return;
       const key = e.key.toUpperCase();
       if (ALPHABET.includes(key)) {
         guessLetter(key);
@@ -103,10 +116,42 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, [gameState, guessLetter]);
 
-  if (!gameState) {
+  // Config phase — host belum pilih bahasa
+  if (!gameState || gameState.phase === 'config' || gameState.wordLength === 0) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <p className="text-cute-muted text-xl">Memuat game...</p>
+      <div className="max-w-md mx-auto space-y-6 text-center">
+        <p className="text-2xl">💀</p>
+        <h2 className="text-xl font-bold text-cute-text">Hangman Co-op</h2>
+        <p className="text-cute-muted text-sm">Pilih bahasa kata yang akan ditebak.</p>
+
+        <div className="space-y-2">
+          {([
+            { value: 'id' as Lang, label: '🇮🇩 Bahasa Indonesia', detail: 'Hewan · Buah · Negara' },
+            { value: 'en' as Lang, label: '🇬🇧 English', detail: 'Animal · Fruit · Country' },
+          ]).map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setLanguage(opt.value)}
+              className={`w-full flex items-center justify-between px-4 py-2.5 rounded-xl border-2 transition-all ${
+                language === opt.value
+                  ? 'border-primary bg-pink-50 shadow-soft'
+                  : 'border-pink-100 bg-white hover:border-primary'
+              }`}
+            >
+              <span className="font-bold text-cute-text">{opt.label}</span>
+              <span className="text-xs text-cute-muted">{opt.detail}</span>
+            </button>
+          ))}
+        </div>
+
+        <motion.button
+          whileHover={{ scale: 1.03 }}
+          whileTap={{ scale: 0.97 }}
+          onClick={sendConfig}
+          className="w-full bg-primary text-white font-bold py-3 rounded-xl shadow-soft"
+        >
+          Mulai Main
+        </motion.button>
       </div>
     );
   }

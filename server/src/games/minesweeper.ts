@@ -170,6 +170,28 @@ export class MinesweeperEngine extends BaseGame {
 
     return { newState: state, events };
   }
+
+  // Disconnection handling: prune the leaver so turns never rotate to a ghost.
+  // With 1 player left the co-op game can still continue solo (win/lose rules
+  // unchanged) — no forced game over.
+  removePlayer(
+    state: MinesweeperExtendedState,
+    playerId: string,
+  ): { playerOrder: string[]; gameOver?: boolean } {
+    if (state.winner || state.phase !== 'playing') return { playerOrder: state.playerOrder };
+    const idx = state.playerOrder.indexOf(playerId);
+    if (idx === -1) return { playerOrder: state.playerOrder };
+    const next = [...state.playerOrder];
+    next.splice(idx, 1);
+    if (state.currentTurn > idx) {
+      state.currentTurn = (state.currentTurn - 1 + next.length) % Math.max(next.length, 1);
+    } else if (state.currentTurn >= next.length && next.length > 0) {
+      state.currentTurn = 0;
+    }
+    if (next.length === 1) state.chainActive = false;
+    state.playerOrder = next;
+    return { playerOrder: next };
+  }
 }
 
 // === Turn logic ===
@@ -274,14 +296,20 @@ function revealCascade(
 // === Client-facing projection (bombs hidden) ===
 
 export function toView(state: MinesweeperExtendedState): MinesweeperView {
+  const gameOver = state.winner != null;
   const cells = state.grid.map(row =>
     row.map(cell => {
       if (cell.state === 'revealed') {
-        return {
-          state: cell.state,
-          adjacent: cell.adjacent,
-          ...(cell.hasBomb ? { exploded: true } : {}),
-        };
+        if (cell.hasBomb) {
+          // The clicked bomb gets exploded:true; other revealed bombs render as 💣
+          return { state: cell.state, adjacent: cell.adjacent, exploded: true };
+        }
+        return { state: cell.state, adjacent: cell.adjacent };
+      }
+      // After a loss, uncover every remaining bomb so the board shows the full
+      // picture. adjacent:-1 marks "bomb, not the clicked one" → client renders 💣.
+      if (gameOver && cell.hasBomb) {
+        return { state: 'revealed' as const, adjacent: -1, exploded: false };
       }
       // Hidden / flagged — do NOT leak hasBomb or real adjacency
       return { state: cell.state, adjacent: 0 };

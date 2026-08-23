@@ -26,11 +26,20 @@ export default function RoomPage() {
   const [gameActive, setGameActive] = useState(false);
   const [gameWinner, setGameWinner] = useState<{ id: string; name: string } | null>(null);
 
-  // After navigation the component is fresh — ask the server for room state
+  // After navigation the component is fresh — ask the server for room state.
+  // Mid-game recovery: server replays the current game snapshot in the same ack.
   useEffect(() => {
     if (!socket || !connected) return;
     if (!room) {
-      syncRoom(pin);
+      syncRoom(pin, (state) => {
+        if (state != null) {
+          setGameState(state);
+          setGameActive(true);
+          if ((state as { winner?: string | null }).winner) {
+            setGameWinner(null); // re-show banner only on a fresh game:over emit
+          }
+        }
+      });
     }
   }, [socket, connected, pin, room, syncRoom]);
 
@@ -103,11 +112,28 @@ export default function RoomPage() {
               animate={{ scale: 1 }}
               className="bg-white p-8 rounded-cute shadow-soft text-center max-w-sm mx-4"
             >
-              <p className="text-5xl mb-4">{gameWinner.id === myId ? '🎉' : '🙌'}</p>
-              <h2 className="text-2xl font-bold text-cute-text mb-2">
-                {gameWinner.id === myId ? 'Kamu Menang!' : `${gameWinner.name} Menang!`}
-              </h2>
-              <p className="text-cute-muted mb-6">Game selesai!</p>
+              {/* Co-op outcomes: 'team' = everyone won, 'none' = team lost.
+                  Otherwise 1v1/ffa: compare against my id. */}
+              {(() => {
+                const isTeamWin = gameWinner.id === 'team';
+                const isTeamLoss = gameWinner.id === 'none';
+                const iWon = !isTeamLoss && (isTeamWin || gameWinner.id === myId);
+                const emoji = isTeamLoss ? '😵' : iWon ? '🎉' : '🙌';
+                const title = isTeamLoss
+                  ? 'Tim Kalah!'
+                  : isTeamWin
+                    ? 'Tim Menang! 🎉'
+                    : iWon
+                      ? 'Kamu Menang!'
+                      : `${gameWinner.name} Menang!`;
+                return (
+                  <>
+                    <p className="text-5xl mb-4">{emoji}</p>
+                    <h2 className="text-2xl font-bold text-cute-text mb-2">{title}</h2>
+                    <p className="text-cute-muted mb-6">Game selesai!</p>
+                  </>
+                );
+              })()}
               <div className="space-y-3">
                 <Button onClick={() => { setGameWinner(null); setGameActive(false); }} className="w-full">
                   🔄 Kembali ke Lobby
