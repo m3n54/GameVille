@@ -1,6 +1,6 @@
 // === Room & Player ===
 
-export type GameType = 'snakes-ladders' | 'hangman' | 'sea-battle';
+export type GameType = 'snakes-ladders' | 'hangman' | 'sea-battle' | 'minesweeper';
 
 export interface Player {
   id: string;
@@ -45,6 +45,7 @@ export interface ClientToServerEvents {
   'room:create': (data: { name: string; nickname: string; color: string; emoji: string }) => void;
   'room:join': (data: { pin: string; nickname: string; color: string; emoji: string }) => void;
   'room:leave': () => void;
+  'room:sync': (data: { pin: string }, callback: (response: { ok: boolean; room?: Room; error?: string }) => void) => void;
   'player:ready': (data: { ready: boolean }) => void;
   'game:select': (data: { gameType: GameType }) => void;
   'game:start': () => void;
@@ -91,4 +92,46 @@ export interface SeaBattleState {
   grid2: string[][];
   ships1: Ship[];
   ships2: Ship[];
+}
+
+// === Minesweeper (co-op) ===
+
+export type MinesweeperDifficulty = 'mudah' | 'sedang' | 'sulit' | 'ekstrem';
+export type MinesweeperMode = 'santai' | 'tantangan';
+export type CellState = 'hidden' | 'revealed' | 'flagged';
+
+export interface Cell {
+  hasBomb: boolean;
+  adjacent: number;   // computed at init
+  state: CellState;
+}
+
+export interface MinesweeperState {
+  difficulty: MinesweeperDifficulty;
+  mode: MinesweeperMode;
+  rows: number;
+  cols: number;
+  bombCount: number;
+  // Server-side truth (never sent raw to clients while playing):
+  grid: Cell[][];
+  revealedSafeCount: number;
+  totalSafeCells: number;
+  currentTurn: number;        // index into playerOrder
+  playerOrder: string[];
+  chainActive: boolean;       // tantangan mode: current player keeps playing
+  winner: 'team' | 'none' | null;
+}
+
+// Client-facing projection (server sends this, bombs hidden):
+export interface MinesweeperView {
+  difficulty: MinesweeperDifficulty;
+  mode: MinesweeperMode;
+  rows: number;
+  cols: number;
+  bombCount: number;
+  cells: { state: CellState; adjacent: number; exploded?: boolean }[][];
+  flagsUsed: number;
+  currentTurn: number;
+  chainActive: boolean;
+  winner: 'team' | 'none' | null;
 }
