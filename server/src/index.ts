@@ -3,7 +3,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import { ClientToServerEvents, ServerToClientEvents, GameType } from './types';
-import { createRoom, joinRoom, leaveRoom, toggleReady, setGameType, canStartGame, setRoomState, getRoom, findByPlayer } from './rooms';
+import { createRoom, joinRoom, leaveRoom, toggleReady, setGameType, canStartGame, setRoomState, getRoom, findByPlayer, findByPin } from './rooms';
 import { BaseGame, GameInstance } from './games/base';
 import { SnakesLaddersEngine } from './games/snakes-ladders';
 import { HangmanEngine } from './games/hangman';
@@ -70,6 +70,20 @@ io.on('connection', (socket) => {
         socket.to(result.roomId).emit('player:update', getRoom(result.roomId)!.players);
       }
     }
+  });
+
+  // Client asks for room state after navigation (same socket, same membership).
+  // Membership is the source of truth — must work in any room state (waiting/playing),
+  // so we look up by member and verify the PIN matches rather than searching by PIN
+  // (findByPin only returns 'waiting' rooms, which would break mid-game recovery).
+  socket.on('room:sync', (data, callback) => {
+    const memberRoom = findByPlayer(socket.id);
+    if (!memberRoom || memberRoom.pin !== data.pin) {
+      callback({ ok: false, error: 'Kamu bukan anggota ruang ini' });
+      return;
+    }
+    socket.join(memberRoom.id);
+    callback({ ok: true, room: memberRoom });
   });
 
   socket.on('player:ready', (data) => {
