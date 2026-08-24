@@ -33,7 +33,7 @@ export default function MinesweeperGrid({
 
   const handleReveal = (row: number, col: number) => {
     if (!interactive) return;
-    const cell = view.cells[row]?.[col];
+    const cell = view.cells?.[row]?.[col];
     if (!cell || cell.state !== 'hidden') return;
     onReveal(row, col);
   };
@@ -45,16 +45,16 @@ export default function MinesweeperGrid({
   ) => {
     e.preventDefault();
     if (!interactive) return;
-    const cell = view.cells[row]?.[col];
+    const cell = view.cells?.[row]?.[col];
     if (!cell || cell.state === 'revealed') return;
     onToggleFlag(row, col);
   };
 
   return (
     <div className="inline-block p-2 md:p-3 bg-cute-bg rounded-2xl shadow-soft">
-      {view.cells.map((rowCells, row) => (
+      {(view.cells ?? []).map((rowCells, row) => (
         <div key={row} className="flex">
-          {rowCells.map((cell, col) => {
+          {(rowCells ?? []).map((cell, col) => {
             // exploded:true = the bomb that was clicked (💥); after a loss the
             // server also uncovers remaining bombs as revealed cells → 💣
             const isBoomClick = cell.exploded === true;

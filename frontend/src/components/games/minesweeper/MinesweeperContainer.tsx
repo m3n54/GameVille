@@ -209,7 +209,7 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
       {/* Scoreboard */}
       <div className="flex flex-wrap items-center justify-center gap-3">
         <span className="bg-white px-4 py-1.5 rounded-full text-sm font-bold text-cute-text shadow-soft">
-          💣 {Math.max(0, view.bombCount - view.flagsUsed)}
+          💣 {Math.max(0, (view.bombCount ?? 0) - (view.flagsUsed ?? 0))}
         </span>
         {!isOver && (
           <span

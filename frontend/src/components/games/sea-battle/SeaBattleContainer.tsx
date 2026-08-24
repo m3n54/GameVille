@@ -29,10 +29,10 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
       setGameState(s);
 
       if (myId === s.player1Id) {
-        setMyGrid(s.grid1);
+        setMyGrid(s.grid1 ?? []);
         setEnemyGrid(getEnemyView(s.grid2));
       } else {
-        setMyGrid(s.grid2);
+        setMyGrid(s.grid2 ?? []);
         setEnemyGrid(getEnemyView(s.grid1));
       }
     };
@@ -93,7 +93,7 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
 
   const fire = useCallback((row: number, col: number) => {
     if (!gameState || gameState.phase !== 'playing') return;
-    if (enemyGrid[row][col] !== ' ') return;
+    if (!enemyGrid[row] || enemyGrid[row][col] !== ' ') return;
     socket.emit('game:action', { type: 'fire', payload: { row, col } });
   }, [socket, gameState, enemyGrid]);
 
@@ -101,10 +101,10 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
     if (initial) {
       setGameState(initial);
       if (myId === initial.player1Id) {
-        setMyGrid(initial.grid1);
+        setMyGrid(initial.grid1 ?? []);
         setEnemyGrid(getEnemyView(initial.grid2));
       } else {
-        setMyGrid(initial.grid2);
+        setMyGrid(initial.grid2 ?? []);
         setEnemyGrid(getEnemyView(initial.grid1));
       }
     }
@@ -118,12 +118,14 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
     );
   }
 
-  const isMyTurn = gameState.currentTurn === myId;
+  const isMyTurn = !!gameState.currentTurn && gameState.currentTurn === myId;
   const isSetup = gameState.phase === 'setup';
-  const myShipsPlaced = myId === gameState.player1Id
-    ? gameState.ships1.length > 0
-    : gameState.ships2.length > 0;
   const isOver = gameState.phase === 'finished';
+  const ships1 = gameState.ships1 ?? [];
+  const ships2 = gameState.ships2 ?? [];
+  const myShipsPlaced = myId === gameState.player1Id
+    ? ships1.length > 0
+    : ships2.length > 0;
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -137,9 +139,10 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
           className="text-center text-lg font-bold text-cute-text"
         >
           {isOver
-            ? gameState.winner === myId
+            ? gameState.winner === myId && gameState.winner !== null
               ? '🎉 Kamu Menang! Semua kapal lawan tenggelam!'
               : '😵 Kamu Kalah... Semua kapalmu tenggelam!'
+
             : message || 'Menunggu...'}
         </motion.div>
       </AnimatePresence>
@@ -162,8 +165,8 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
           <p className="text-xs text-cute-muted mt-1">
             Kapal:{' '}
             {myId === gameState.player1Id
-              ? gameState.ships1.map(s => s.type).join(', ') || 'Belum ada'
-              : gameState.ships2.map(s => s.type).join(', ') || 'Belum ada'}
+              ? ships1.map(s => s.type).join(', ') || 'Belum ada'
+              : ships2.map(s => s.type).join(', ') || 'Belum ada'}
           </p>
         </div>
 
@@ -187,7 +190,8 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
   );
 }
 
-function getEnemyView(grid: string[][]): string[][] {
+function getEnemyView(grid: string[][] | undefined): string[][] {
+  if (!grid) return [];
   return grid.map(row =>
     row.map(cell => {
       if (cell === 'H') return 'H';

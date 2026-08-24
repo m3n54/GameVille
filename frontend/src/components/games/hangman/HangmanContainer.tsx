@@ -96,7 +96,7 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
   const guessLetter = useCallback(
     (letter: string) => {
       if (!gameState) return;
-      const already = gameState.guessedLetters.includes(letter);
+      const already = (gameState.guessedLetters || []).includes(letter);
       if (already) return;
       socket.emit('game:action', { type: 'guess', payload: { letter } });
     },
@@ -106,7 +106,7 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
   // Keyboard support
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!gameState || gameState.phase === 'config') return;
+      if (!gameState || (gameState.phase ?? 'config') === 'config') return;
       const key = e.key.toUpperCase();
       if (ALPHABET.includes(key)) {
         guessLetter(key);
@@ -117,7 +117,11 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
   }, [gameState, guessLetter]);
 
   // Config phase — host belum pilih bahasa
-  if (!gameState || gameState.phase === 'config' || gameState.wordLength === 0) {
+  if (
+    !gameState ||
+    (gameState.phase ?? 'config') === 'config' ||
+    (gameState.wordLength ?? 0) === 0
+  ) {
     return (
       <div className="max-w-md mx-auto space-y-6 text-center">
         <p className="text-2xl">💀</p>
@@ -186,13 +190,13 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
       {/* Category */}
       <div className="text-center">
         <span className="bg-secondary text-white px-4 py-1 rounded-full text-sm font-bold">
-          Kategori: {gameState.category}
+          Kategori: {gameState.category ?? ''}
         </span>
       </div>
 
       {/* Drawing + Word */}
       <div className="flex flex-col md:flex-row items-center justify-center gap-8">
-        <HangmanDrawing attemptsLeft={gameState.remainingAttempts} maxAttempts={6} />
+        <HangmanDrawing attemptsLeft={gameState.remainingAttempts ?? 6} maxAttempts={6} />
 
         <div className="space-y-3">
           {/* Word display */}
@@ -212,7 +216,7 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
 
           {/* Attempts info */}
           <p className="text-center text-cute-muted text-sm">
-            Sisa percobaan: {gameState.remainingAttempts} / 6
+            Sisa percobaan: {gameState.remainingAttempts ?? 6} / 6
           </p>
 
           {/* Debug: turn indicator */}

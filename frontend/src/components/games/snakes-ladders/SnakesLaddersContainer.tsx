@@ -59,7 +59,12 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
     socket.emit('game:action', { type: 'roll' });
   }, [socket, rolling]);
 
-  const isMyTurn = gameState ? gameState.players[gameState.currentTurn]?.id === myId : false;
+  // Defensive: during mid-game recovery the state may be partial — players could be
+  // undefined/empty while currentTurn points past the end. Guard every indexed access.
+  const players = gameState?.players ?? [];
+  const safeCurrentTurn = typeof gameState?.currentTurn === 'number' ? gameState.currentTurn : -1;
+  const currentPlayer = players[safeCurrentTurn] ?? null;
+  const isMyTurn = !!currentPlayer && currentPlayer.id === myId;
   const isGameOver = gameState?.winner != null;
 
   if (!gameState) {
@@ -74,13 +79,13 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
     <div className="space-y-4">
       {/* Score board */}
       <div className="flex justify-center gap-4 flex-wrap">
-        {gameState.players.map((p, i) => (
+        {players.map((p, i) => (
           <div
             key={p.id}
             className={`px-4 py-2 rounded-cute border-2 transition-all ${
-              i === gameState.currentTurn ? 'border-primary bg-pink-50 shadow-soft scale-105' : 'border-gray-100 bg-white'
+              i === safeCurrentTurn ? 'border-primary bg-pink-50 shadow-soft scale-105' : 'border-gray-100 bg-white'
             }`}
-            style={{ borderColor: i === gameState.currentTurn ? p.color : undefined }}
+            style={{ borderColor: i === safeCurrentTurn ? p.color : undefined }}
           >
             <p className="font-bold text-sm" style={{ color: p.color }}>
               {p.id === myId ? 'Kamu' : `Pemain ${i + 1}`}
@@ -107,14 +112,14 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
 
       {/* 3D Board */}
       <GameBoard3D
-        players={gameState.players.map(p => ({
+        players={players.map(p => ({
           id: p.id,
           position: p.position,
           color: p.color,
         }))}
         snakes={gameState.snakes}
         ladders={gameState.ladders}
-        currentTurn={gameState.currentTurn}
+        currentTurn={safeCurrentTurn}
       />
 
       {/* Dice */}
