@@ -1,5 +1,5 @@
 import { BaseGame, GameEvent } from './base';
-import { GameType } from '../types';
+import { GameType, SeaBattlePlayerView } from '../types';
 
 interface Ship {
   type: string;
@@ -123,7 +123,16 @@ export class SeaBattleEngine extends BaseGame {
         return { newState: state, events: [{ type: 'error', data: { message: 'Bukan giliranmu!' } }] };
       }
 
-      const { row, col } = action.payload as { row: number; col: number };
+      // H4: validate the payload BEFORE indexing — a malformed row/col used to
+      // throw TypeError inside handleAction and leave the firing client hanging.
+      const payload = (action.payload ?? {}) as { row?: unknown; col?: unknown };
+      const row = payload.row;
+      const col = payload.col;
+      const validCoord = (v: unknown): v is number =>
+        typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < 10;
+      if (!validCoord(row) || !validCoord(col)) {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Koordinat tidak valid!' } }] };
+      }
       const targetGrid = playerId === state.player1Id ? 'grid2' : 'grid1';
       const targetShips = playerId === state.player1Id ? 'ships2' : 'ships1';
 
@@ -180,4 +189,44 @@ export class SeaBattleEngine extends BaseGame {
     state.phase = 'finished';
     return { playerOrder: [], gameOver: true };
   }
+}
+
+// === Client-facing projection (per-player, anti-cheat) ===
+//
+// The raw SeaBattleState contains BOTH players' ship positions. Broadcasting it
+// verbatim let any client read the opponent's grid straight from its own socket
+// payloads (C1). This projection gives each caller only:
+//   - their own grid + own ships in full
+//   - the enemy grid with 'S' markers replaced by ' ' (hits/misses remain)
+// After the game finishes the full reveal is safe for everyone.
+
+function stripShips(grid: string[][]): string[][] {
+  return grid.map(row => row.map(cell => (cell === 'S' ? ' ' : cell)));
+}
+
+function countSunk(ships: Ship[]): number {
+  return ships.filter(ship => ship.hits >= ship.cells.length).length;
+}
+
+export function seaBattleView(state: SeaBattleState, forPlayerId?: string): SeaBattlePlayerView {
+  // Game finished → full reveal is safe; otherwise default to player 1's view.
+  const revealAll = state.winner != null;
+  const asPlayer1 = revealAll || forPlayerId == null || forPlayerId === state.player1Id;
+  const myGrid = asPlayer1 ? state.grid1 : state.grid2;
+  const enemyGrid = asPlayer1 ? state.grid2 : state.grid1;
+  const myShips = asPlayer1 ? state.ships1 : state.ships2;
+  const enemyShips = asPlayer1 ? state.ships2 : state.ships1;
+
+  return {
+    player1Id: state.player1Id,
+    player2Id: state.player2Id,
+    currentTurn: state.currentTurn,
+    phase: state.phase,
+    winner: state.winner,
+    myGrid: myGrid.map(row => [...row]),
+    // Reveal remaining enemy ships once the game is over; hide them while playing.
+    enemyGrid: revealAll ? enemyGrid.map(row => [...row]) : stripShips(enemyGrid),
+    myShips: myShips.map(s => ({ ...s, cells: s.cells.map(c => [...c] as [number, number]) })),
+    enemySunkShips: countSunk(enemyShips),
+  };
 }

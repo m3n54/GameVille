@@ -46,3 +46,16 @@ export interface GameEvent {
   type: string;
   data: Record<string, unknown>;
 }
+
+// Standalone factory mirroring BaseGame.createInstance — usable without holding
+// an engine subclass reference at the call site.
+export function createInstance(engine: BaseGame, roomId: string, playerOrder: string[]): GameInstance {
+  return {
+    roomId,
+    gameType: engine.gameType,
+    state: engine.createInitialState(playerOrder),
+    currentTurnIndex: 0,
+    playerOrder,
+    winner: null,
+  };
+}

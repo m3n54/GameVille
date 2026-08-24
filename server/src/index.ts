@@ -3,94 +3,140 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import { ClientToServerEvents, ServerToClientEvents, GameType } from './types';
-import { createRoom, joinRoom, leaveRoom, toggleReady, setGameType, canStartGame, setRoomState, getRoom, findByPlayer, findByPin } from './rooms';
-import { BaseGame, GameInstance } from './games/base';
-import { SnakesLaddersEngine } from './games/snakes-ladders';
-import { HangmanEngine } from './games/hangman';
-import { SeaBattleEngine } from './games/sea-battle';
-import { MinesweeperEngine, toView } from './games/minesweeper';
-import { toHangmanView } from './games/hangman';
-import type { HangmanExtendedState } from './games/hangman';
+import {
+  createRoom,
+  joinRoom,
+  toggleReady,
+  setGameType,
+  canStartGame,
+  setRoomState,
+  getRoom,
+  findByPlayer,
+  validateIdentity,
+} from './rooms';
+import { createInstance } from './games/base';
+import {
+  GAMES,
+  engines,
+  stateForClient,
+  handlePlayerExit,
+  allowEvent,
+  startRoomSweeper,
+  findGameForSocket,
+} from './gameService';
 
-const GAMES = new Map<string, GameInstance>();
+// === CORS (deploy F4) =======================================================
+// Comma-separated origin list. Entries of the form `https://*.domain.tld` are
+// treated as suffix wildcards — needed because Vercel preview deployments get
+// per-PR subdomains that a single pinned origin would reject.
+const corsOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3000')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
-const engines: Record<string, BaseGame> = {
-  'snakes-ladders': new SnakesLaddersEngine(),
-  'hangman': new HangmanEngine(),
-  'sea-battle': new SeaBattleEngine(),
-  'minesweeper': new MinesweeperEngine(),
-};
-
-// Anti-cheat: minesweeper clients must never receive the raw grid (hasBomb leaks);
-// hangman clients must never receive the secret word until game over;
-// sea battle grids are per-player — a player sees their own grid plus the enemy's hit/miss marks.
-// Everything that emits game state goes through this projection.
-function stateForClient(gameType: string, state: unknown, forPlayerId?: string): unknown {
-  if (gameType === 'minesweeper') return toView(state as Parameters<typeof toView>[0]);
-  if (gameType === 'hangman') return toHangmanView(state as HangmanExtendedState);
-  void forPlayerId;
-  return state;
+function isOriginAllowed(origin: string): boolean {
+  return corsOrigins.some((allowed) => {
+    if (allowed.startsWith('https://*.')) {
+      const suffix = allowed.slice('https://*'.length); // ".vercel.app"
+      return origin.endsWith(suffix);
+    }
+    return allowed === origin;
+  });
 }
 
-const corsOrigin = (process.env.CORS_ORIGIN || 'http://localhost:3000')
-  .split(',')
-  .map((s) => s.trim());
+const corsOriginFn = (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+  // Allow non-browser tools (no Origin header) plus anything on the list.
+  if (!origin || isOriginAllowed(origin)) return callback(null, true);
+  callback(new Error('Not allowed by CORS'));
+};
 
 const app = express();
-app.use(cors({ origin: corsOrigin }));
+app.use(cors({ origin: corsOriginFn }));
 
 const httpServer = createServer(app);
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
-  cors: {
-    origin: corsOrigin,
-    methods: ['GET', 'POST'],
-  },
+  cors: { origin: corsOriginFn, methods: ['GET', 'POST'] },
   transports: ['websocket', 'polling'],
+  maxHttpBufferSize: 64 * 1024, // M5: payloads beyond chat-sized input are abuse
 });
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', rooms: io.engine.clientsCount });
 });
 
+startRoomSweeper();
+
 io.on('connection', (socket) => {
   console.log(`[+] Player connected: ${socket.id}`);
 
   // === ROOM EVENTS ===
 
-  socket.on('room:create', (data) => {
+  socket.on('room:create', (data, callback) => {
+    // FE-F1: respond via ack instead of a fire-and-forget emit + client-side
+    // socket.once() — the old pattern accumulated listeners across attempts.
+    const ack = callback;
+    if (!ack) return;
+
+    if (!allowEvent(`create:${socket.id}`, 5, 60_000)) {
+      ack({ ok: false, error: 'Terlalu banyak percobaan. Coba lagi nanti.' });
+      return;
+    }
+    const invalid = validateIdentity(data);
+    if (invalid) {
+      ack({ ok: false, error: invalid });
+      return;
+    }
+
     const room = createRoom(data, socket.id);
     socket.join(room.id);
-    socket.emit('room:created', room);
+    ack({ ok: true, room });
     console.log(`[Room] Created: ${room.pin} by ${data.nickname}`);
   });
 
-  socket.on('room:join', (data) => {
+  socket.on('room:join', (data, callback) => {
+    const ack = callback;
+    if (!ack) return;
+
+    // M7: rate-limit joins to blunt PIN enumeration.
+    if (!allowEvent(`join:${socket.id}`, 10, 60_000)) {
+      ack({ ok: false, error: 'Terlalu banyak percobaan. Coba lagi nanti.' });
+      return;
+    }
+    if (typeof data?.pin !== 'string') {
+      ack({ ok: false, error: 'Kode ruang tidak valid' });
+      return;
+    }
+    const invalid = validateIdentity(data);
+    if (invalid) {
+      ack({ ok: false, error: invalid });
+      return;
+    }
+
     const room = joinRoom(data.pin, data, socket.id);
     if (!room) {
-      socket.emit('room:error', { message: 'Kode ruang tidak valid atau ruang sudah penuh!' });
+      ack({ ok: false, error: 'Kode ruang tidak valid atau ruang sudah penuh!' });
       return;
     }
     socket.join(room.id);
-    socket.emit('room:joined', room);
-    socket.to(room.id).emit('player:entered', room.players[room.players.length - 1]);
-    socket.to(room.id).emit('room:state', room);
+    ack({ ok: true, room });
+    // Single source of truth for membership: everyone gets the fresh list.
+    io.to(room.id).emit('player:update', room.players);
+    console.log(`[Room] Joined: ${data.pin} by ${data.nickname}`);
   });
 
+  // Same shared exit path as disconnect — leaving via the button mid-game used
+  // to strand a ghost in the engine's turn rotation (H2).
   socket.on('room:leave', () => {
-    const result = leaveRoom(socket.id);
-    if (result.roomId) {
-      socket.leave(result.roomId);
-      socket.to(result.roomId).emit('player:left', socket.id);
-      if (result.newHost) {
-        socket.to(result.roomId).emit('player:update', getRoom(result.roomId)!.players);
-      }
-    }
+    const room = findByPlayer(socket.id);
+    handlePlayerExit(io, socket);
+    if (room) socket.leave(room.id);
   });
 
-  // Client asks for room state after navigation (same socket, same membership).
-  // Membership is the source of truth — must work in any room state (waiting/playing),
-  // so we look up by member and verify the PIN matches rather than searching by PIN
-  // (findByPin only returns 'waiting' rooms, which would break mid-game recovery).
+  // Client asks for room state after navigation or reconnect (same membership).
+  // Membership is the source of truth — must work in any room state
+  // (waiting/playing/finished), so we look up by member and verify the PIN
+  // matches rather than searching by PIN (findByPin only returns 'waiting'
+  // rooms, which would break mid-game recovery).
   socket.on('room:sync', (data, callback) => {
     const memberRoom = findByPlayer(socket.id);
     if (!memberRoom || memberRoom.pin !== data.pin) {
@@ -99,17 +145,17 @@ io.on('connection', (socket) => {
     }
     socket.join(memberRoom.id);
 
-    // Mid-game recovery: replay current game state + turn so a refreshed tab
-    // re-enters the game instead of dead-ending in the lobby.
+    // Mid-game recovery: replay current game state + whose turn it is, so a
+    // refreshed tab re-enters the game instead of dead-ending in the lobby.
     let gameSnapshot: unknown = null;
+    let turnPlayerId: string | undefined;
     const instance = GAMES.get(memberRoom.id);
     const engine = engines[memberRoom.gameType ?? ''];
     if (instance && engine && (memberRoom.state === 'playing' || memberRoom.state === 'finished')) {
-      // Sea battle grids are per-player secret — send this player's own view only
       gameSnapshot = stateForClient(instance.gameType, instance.state, socket.id);
-      void engine;
+      turnPlayerId = currentTurnPlayerId(instance);
     }
-    callback({ ok: true, room: memberRoom, gameState: gameSnapshot });
+    callback({ ok: true, room: memberRoom, gameState: gameSnapshot, turnPlayerId });
   });
 
   socket.on('player:ready', (data) => {
@@ -123,45 +169,37 @@ io.on('connection', (socket) => {
     const roomData = findByPlayer(socket.id);
     if (!roomData) return;
     if (roomData.hostId !== socket.id) return;
-    if (!canStartGame(roomData.id)) return;
 
-    const engine = engines[roomData.gameType!];
+    // H3: guard the room state — a double-clicked Mulai used to pass
+    // canStartGame twice and silently recreate/reset the live game.
+    if (roomData.state !== 'waiting') {
+      socket.emit('room:error', { message: 'Game sudah dimulai!' });
+      return;
+    }
+    if (!canStartGame(roomData.id)) return;
+    if (!roomData.gameType) return;
+    const engine = engines[roomData.gameType];
     if (!engine) return;
 
-    const playerOrder = roomData.players.map(p => p.id);
-    const instance: GameInstance = {
-      roomId: roomData.id,
-      gameType: roomData.gameType!,
-      state: engine.createInitialState(playerOrder),
-      currentTurnIndex: 0,
-      playerOrder,
-      winner: null,
-    };
+    const playerOrder = roomData.players.map((p) => p.id);
+    const instance = createInstance(engine, roomData.id, playerOrder);
 
     GAMES.set(roomData.id, instance);
     setRoomState(roomData.id, 'playing');
 
     // Notify all players
-    io.to(roomData.id).emit('game:started', roomData.gameType!);
+    io.to(roomData.id).emit('game:started', roomData.gameType);
     io.to(roomData.id).emit('game:state', stateForClient(instance.gameType, instance.state));
 
     // Notify whose turn it is
     const currentPlayerId = instance.playerOrder[instance.currentTurnIndex];
-    io.to(roomData.id).emit('game:action', { type: 'turn', nextPlayerId: currentPlayerId });
+    if (currentPlayerId) {
+      io.to(roomData.id).emit('game:action', { type: 'turn', nextPlayerId: currentPlayerId });
+    }
   });
 
   socket.on('game:action', (data) => {
-    // Find the room and game instance for this socket
-    let gameRoom: { id: string } | null = null;
-    for (const [roomId, instance] of GAMES) {
-      if (instance.playerOrder.includes(socket.id)) {
-        gameRoom = { id: roomId };
-        break;
-      }
-    }
-    if (!gameRoom) return;
-
-    const instance = GAMES.get(gameRoom.id);
+    const instance = findGameForSocket(socket.id);
     if (!instance) return;
 
     // Single source of truth: engine's state.winner — block actions after game over
@@ -171,61 +209,61 @@ io.on('connection', (socket) => {
     const engine = engines[instance.gameType];
     if (!engine) return;
 
-    const result = engine.handleAction(instance.state, socket.id, data);
+    // M2: config actions decide how the whole match plays — host-only.
+    const room = getRoom(instance.roomId);
+    if (data.type === 'config' && room && room.hostId !== socket.id) {
+      socket.emit('room:error', { message: 'Hanya host yang bisa mengatur permainan' });
+      return;
+    }
+
+    // H4 belt-and-suspenders: an engine throw must not kill the worker or
+    // leave the acting client hanging — surface it as a normal error event.
+    let result;
+    try {
+      result = engine.handleAction(instance.state, socket.id, data);
+    } catch {
+      socket.emit('room:error', { message: 'Aksi gagal diproses' });
+      return;
+    }
     instance.state = result.newState;
 
     // Process all events
     for (const event of result.events) {
       switch (event.type) {
         case 'diceResult':
-          io.to(gameRoom.id).emit('game:state', stateForClient(instance.gameType, instance.state));
-          io.to(gameRoom.id).emit('game:action', event.data);
+          io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
+          io.to(instance.roomId).emit('game:action', event.data);
           break;
         case 'revealResult':
         case 'flagToggled':
-          io.to(gameRoom.id).emit('game:state', stateForClient(instance.gameType, instance.state));
-          io.to(gameRoom.id).emit('game:action', { type: event.type, ...event.data });
-          break;
         case 'correctGuess':
         case 'wrongGuess':
-          io.to(gameRoom.id).emit('game:state', stateForClient(instance.gameType, instance.state));
-          io.to(gameRoom.id).emit('game:action', { type: event.type, ...event.data });
-          break;
         case 'turnChange':
-          io.to(gameRoom.id).emit('game:state', stateForClient(instance.gameType, instance.state));
-          io.to(gameRoom.id).emit('game:action', { type: 'turn', ...event.data });
+          io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
+          io.to(instance.roomId).emit('game:action',
+            event.type === 'turnChange' ? { type: 'turn', ...event.data } : { type: event.type, ...event.data });
           break;
         case 'gameOver':
-          io.to(gameRoom.id).emit('game:state', stateForClient(instance.gameType, instance.state));
-          const wId = event.data.winnerId as string;
-          let winnerName = 'Unknown';
-          if (wId === 'team') {
-            winnerName = 'Tim';
-          } else if (wId === 'none') {
-            winnerName = '-';
-          } else {
-            const w = instance.playerOrder.find(p => p === wId);
-            winnerName = getRoom(gameRoom.id)?.players.find(p => p.id === w)?.nickname ?? 'Unknown';
-          }
-          io.to(gameRoom.id).emit('game:over', { winnerId: wId, winnerName });
-          setRoomState(gameRoom.id, 'finished');
+          broadcastGameOver(io, instance, event.data.winnerId as string);
           break;
         case 'fireResult':
           socket.emit('game:action', { type: 'fireResult', ...event.data });
-          io.to(gameRoom.id).emit('game:state', stateForClient(instance.gameType, instance.state));
+          io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state, socket.id));
+          // Everyone else gets their own projection of the same board change
+          socket.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
           break;
-        case 'gameStart':
-          // Minesweeper config uses firstTurnId; sea battle uses firstTurn — pass both through
-          io.to(gameRoom.id).emit('game:state', stateForClient(instance.gameType, instance.state));
-          io.to(gameRoom.id).emit('game:action', { type: 'gameStart', firstTurn: event.data.firstTurn, firstTurnId: event.data.firstTurnId });
-          if (event.data.firstTurn) {
-            io.to(gameRoom.id).emit('game:action', { type: 'turn', nextPlayerId: event.data.firstTurn });
-          } else if (event.data.firstTurnId) {
-            io.to(gameRoom.id).emit('game:action', { type: 'turn', nextPlayerId: event.data.firstTurnId });
+        case 'gameStart': {
+          // Minesweeper config uses firstTurnId; sea battle uses firstTurn
+          io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
+          io.to(instance.roomId).emit('game:action', { type: 'gameStart', ...event.data });
+          const firstTurn = (event.data.firstTurn ?? event.data.firstTurnId) as string | undefined;
+          if (firstTurn) {
+            io.to(instance.roomId).emit('game:action', { type: 'turn', nextPlayerId: firstTurn });
           }
           break;
+        }
         case 'shipsPlaced':
-          io.to(gameRoom.id).emit('game:state', stateForClient(instance.gameType, instance.state));
+          io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
           break;
         case 'error':
           socket.emit('room:error', event.data as { message: string });
@@ -242,82 +280,77 @@ io.on('connection', (socket) => {
   });
 
   socket.on('chat:message', (data) => {
-    const room = findRoomBySocket(socket.id);
+    const room = findRoomOfSocket(socket.id);
     if (!room) return;
-    socket.to(room.id).emit('chat:received', {
+    // M5: cap untrusted text before it enters memory or gets broadcast.
+    const text = typeof data?.text === 'string' ? data.text.slice(0, 500) : '';
+    if (!text) return;
+    if (!allowEvent(`chat:${socket.id}`, 10, 10_000)) return;
+    socket.to(room).emit('chat:received', {
       playerId: socket.id,
-      nickname: findPlayerNickname(socket.id),
-      text: data.text,
+      nickname: nicknameOf(room, socket.id),
+      text,
     });
   });
 
   socket.on('reaction:send', (data) => {
-    const room = findRoomBySocket(socket.id);
+    const room = findRoomOfSocket(socket.id);
     if (!room) return;
-    socket.to(room.id).emit('reaction:received', {
+    const emoji = typeof data?.emoji === 'string' ? data.emoji.slice(0, 8) : '';
+    if (!emoji) return;
+    socket.to(room).emit('reaction:received', {
       playerId: socket.id,
-      nickname: findPlayerNickname(socket.id),
-      emoji: data.emoji,
+      nickname: nicknameOf(room, socket.id),
+      emoji,
     });
   });
 
   socket.on('disconnect', () => {
-    const result = leaveRoom(socket.id);
-    if (result.roomId) {
-      socket.to(result.roomId).emit('player:left', socket.id);
-      if (result.newHost) {
-        socket.to(result.roomId).emit('player:update', getRoom(result.roomId)!.players);
-      }
-
-      // Clean up game if room finished
-      const game = GAMES.get(result.roomId);
-      const room = getRoom(result.roomId);
-      if (room?.state === 'finished') {
-        GAMES.delete(result.roomId);
-      } else if (game && (!room || room.players.length === 0)) {
-        // Clean up active game if no players remain
-        GAMES.delete(result.roomId);
-      } else if (game && room && room.players.length > 0) {
-        // Mid-game disconnect: prune the leaver so turns never rotate to a ghost
-        const engine = engines[game.gameType];
-        if (engine) {
-          const outcome = engine.removePlayer(game.state, socket.id);
-          game.playerOrder = outcome.playerOrder.length > 0 ? outcome.playerOrder : game.playerOrder.filter(id => id !== socket.id);
-          if (outcome.gameOver) {
-            const winnerState = game.state as { winner?: string | null };
-            const wId = winnerState.winner ?? 'none';
-            const winnerName = wId === 'team' ? 'Tim'
-              : wId === 'none' ? '-'
-              : getRoom(result.roomId)?.players.find(p => p.id === wId)?.nickname ?? 'Unknown';
-            io.to(result.roomId).emit('game:over', { winnerId: wId, winnerName });
-            setRoomState(result.roomId, 'finished');
-          } else {
-            io.to(result.roomId).emit('game:state', stateForClient(game.gameType, game.state));
-            const turnState = game.state as { currentTurn?: number; players?: { id: string }[] };
-            const nextId = turnState.players
-              ? turnState.players[turnState.currentTurn ?? 0]?.id
-              : game.playerOrder[turnState.currentTurn ?? 0];
-            if (nextId) {
-              io.to(result.roomId).emit('game:action', { type: 'turn', nextPlayerId: nextId });
-            }
-          }
-        }
-      }
-    }
+    handlePlayerExit(io, socket);
     console.log(`[-] Player disconnected: ${socket.id}`);
   });
 });
 
-function findRoomBySocket(socketId: string) {
-  const room = findByPlayer(socketId);
-  if (!room) return null;
-  return { id: room.id };
+// === Helpers ===
+
+// Sea-battle needs per-player projections even within one broadcast tick:
+// the shooter sees the hit result immediately, the rest see the plain board.
+type IOServer = Server<ClientToServerEvents, ServerToClientEvents>;
+
+function broadcastGameOver(io: IOServer, instance: ReturnType<typeof findGameForSocket> & object, winnerId: string): void {
+  if (!instance) return;
+  io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
+  const room = getRoom(instance.roomId);
+  let winnerName = 'Unknown';
+  if (winnerId === 'team') {
+    winnerName = 'Tim';
+  } else if (winnerId === 'none') {
+    winnerName = '-';
+  } else {
+    winnerName = room?.players.find((p) => p.id === winnerId)?.nickname ?? 'Unknown';
+  }
+  io.to(instance.roomId).emit('game:over', { winnerId, winnerName });
+  setRoomState(instance.roomId, 'finished');
 }
 
-function findPlayerNickname(socketId: string): string {
+function currentTurnPlayerId(instance: NonNullable<ReturnType<typeof findGameForSocket>>): string | undefined {
+  const s = instance.state as {
+    currentTurn?: number | string;
+    players?: { id: string }[];
+  };
+  // sea-battle stores the current player's id directly in state.currentTurn
+  if (typeof s.currentTurn === 'string') return s.currentTurn;
+  if (s.players && typeof s.currentTurn === 'number') return s.players[s.currentTurn]?.id;
+  return instance.playerOrder[instance.currentTurnIndex];
+}
+
+function findRoomOfSocket(socketId: string): string | null {
   const room = findByPlayer(socketId);
-  if (!room) return 'Unknown';
-  return room.players.find(p => p.id === socketId)?.nickname ?? 'Unknown';
+  return room?.id ?? null;
+}
+
+function nicknameOf(roomId: string, socketId: string): string {
+  return getRoom(roomId)?.players.find((p) => p.id === socketId)?.nickname ?? 'Unknown';
 }
 
 const PORT = parseInt(process.env.PORT || '3001', 10);

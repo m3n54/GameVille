@@ -73,13 +73,20 @@ export class MinesweeperEngine extends BaseGame {
         return { newState: state, events: [{ type: 'error', data: { message: 'Atur permainan dulu!' } }] };
       }
 
-      const payload = (action.payload ?? {}) as { row?: number; col?: number };
+      const payload = (action.payload ?? {}) as { row?: unknown; col?: unknown };
       const row = payload.row;
       const col = payload.col;
-      if (typeof row !== 'number' || typeof col !== 'number') return { newState: state, events: [] };
-      if (row < 0 || row >= state.rows || col < 0 || col >= state.cols) return { newState: state, events: [] };
+      // M8: malformed or out-of-bounds input used to return silently — the
+      // acting client got no feedback and appeared frozen. Emit an error instead.
+      if (typeof row !== 'number' || typeof col !== 'number'
+        || row < 0 || row >= state.rows || col < 0 || col >= state.cols) {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Koordinat tidak valid!' } }] };
+      }
 
-      const cell = state.grid[row][col];
+      const cell = state.grid[row]?.[col];
+      if (!cell) {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Koordinat tidak valid!' } }] };
+      }
       if (cell.state === 'revealed') return { newState: state, events: [] }; // silent no-op
       if (cell.state === 'flagged') {
         return { newState: state, events: [{ type: 'error', data: { message: 'Lepas bendera dulu!' } }] };
@@ -138,13 +145,19 @@ export class MinesweeperEngine extends BaseGame {
         return { newState: state, events: [{ type: 'error', data: { message: 'Atur permainan dulu!' } }] };
       }
 
-      const payload = (action.payload ?? {}) as { row?: number; col?: number };
+      const payload = (action.payload ?? {}) as { row?: unknown; col?: unknown };
       const row = payload.row;
       const col = payload.col;
-      if (typeof row !== 'number' || typeof col !== 'number') return { newState: state, events: [] };
-      if (row < 0 || row >= state.rows || col < 0 || col >= state.cols) return { newState: state, events: [] };
+      // M8: same malformed-input feedback as reveal
+      if (typeof row !== 'number' || typeof col !== 'number'
+        || row < 0 || row >= state.rows || col < 0 || col >= state.cols) {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Koordinat tidak valid!' } }] };
+      }
 
-      const cell = state.grid[row][col];
+      const cell = state.grid[row]?.[col];
+      if (!cell) {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Koordinat tidak valid!' } }] };
+      }
       if (cell.state === 'revealed') return { newState: state, events: [] }; // silent no-op
 
       cell.state = cell.state === 'flagged' ? 'hidden' : 'flagged';
@@ -156,6 +169,11 @@ export class MinesweeperEngine extends BaseGame {
     }
 
     if (action.type === 'pass') {
+      // M3: pass had no turn enforcement — a non-current player could force-end
+      // the current player's tantangan chain. Gate it like reveal/toggleFlag.
+      if (state.playerOrder.length > 0 && state.playerOrder[state.currentTurn] !== playerId) {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Bukan giliranmu!' } }] };
+      }
       if (state.mode !== 'tantangan') {
         return { newState: state, events: [{ type: 'error', data: { message: 'Pass hanya di mode Tantangan' } }] };
       }
@@ -172,20 +190,26 @@ export class MinesweeperEngine extends BaseGame {
   }
 
   // Disconnection handling: prune the leaver so turns never rotate to a ghost.
-  // With 1 player left the co-op game can still continue solo (win/lose rules
-  // unchanged) — no forced game over.
+  // Pruning also runs during phase 'config' (M1): room state is already
+  // 'playing' while the board awaits its config action, so a disconnect in that
+  // window used to leave a ghost in the rotation. With 1 player left the co-op
+  // game can still continue solo (win/lose rules unchanged) — no forced game over.
   removePlayer(
     state: MinesweeperExtendedState,
     playerId: string,
   ): { playerOrder: string[]; gameOver?: boolean } {
-    if (state.winner || state.phase !== 'playing') return { playerOrder: state.playerOrder };
+    if (state.winner) return { playerOrder: state.playerOrder };
     const idx = state.playerOrder.indexOf(playerId);
     if (idx === -1) return { playerOrder: state.playerOrder };
     const next = [...state.playerOrder];
     next.splice(idx, 1);
+    if (next.length === 0) {
+      state.playerOrder = next;
+      return { playerOrder: next };
+    }
     if (state.currentTurn > idx) {
-      state.currentTurn = (state.currentTurn - 1 + next.length) % Math.max(next.length, 1);
-    } else if (state.currentTurn >= next.length && next.length > 0) {
+      state.currentTurn = (state.currentTurn - 1 + next.length) % next.length;
+    } else if (state.currentTurn >= next.length) {
       state.currentTurn = 0;
     }
     if (next.length === 1) state.chainActive = false;

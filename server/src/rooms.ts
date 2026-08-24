@@ -3,6 +3,27 @@ import { Room, Player, GameType } from './types';
 
 const ROOMS = new Map<string, Room>();
 
+// M5: identity fields arrive from untrusted clients. Validate once at the door
+// so oversized/hostile strings never enter ROOMS memory or get broadcast.
+export function validateIdentity(data: {
+  name?: unknown; nickname?: unknown; color?: unknown; emoji?: unknown;
+}): string | null {
+  if (typeof data.name !== 'string' || data.name.trim().length === 0 || data.name.length > 40) {
+    return 'Nama ruang harus 1-40 karakter';
+  }
+  if (typeof data.nickname !== 'string' || data.nickname.trim().length === 0 || data.nickname.length > 24) {
+    return 'Nickname harus 1-24 karakter';
+  }
+  if (typeof data.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(data.color)) {
+    return 'Warna tidak valid';
+  }
+  // ≤8 code units covers emoji with surrogate pairs; longer input is abuse.
+  if (typeof data.emoji !== 'string' || data.emoji.length === 0 || data.emoji.length > 8) {
+    return 'Emoji tidak valid';
+  }
+  return null;
+}
+
 function generatePin(): string {
   let pin: string;
   do {
@@ -68,15 +89,19 @@ export function leaveRoom(socketId: string): { roomId?: string; newHost?: Player
 
   // Assign new host if host left
   if (room.hostId === socketId && room.players.length > 0) {
-    room.players[0].isHost = true;
-    room.hostId = room.players[0].id;
-    return { roomId: room.id, newHost: room.players[0] };
+    const nextHost = room.players[0]!;
+    nextHost.isHost = true;
+    room.hostId = nextHost.id;
+    return { roomId: room.id, newHost: nextHost };
   }
 
-  // Clean up empty rooms
+  // Clean up empty rooms. H1 fix: still report the roomId so the caller can
+  // delete the matching GAMES entry — the old `return {}` made the disconnect
+  // handler skip game cleanup entirely, leaking one GameInstance per abandoned
+  // game forever.
   if (room.players.length === 0) {
     ROOMS.delete(room.id);
-    return {};
+    return { roomId: room.id };
   }
 
   return { roomId: room.id };
@@ -125,4 +150,12 @@ export function findByPin(pin: string): Room | undefined {
 
 export function findByPlayer(socketId: string): Room | undefined {
   return Array.from(ROOMS.values()).find(r => r.players.some(p => p.id === socketId));
+}
+
+export function listRooms(): Room[] {
+  return Array.from(ROOMS.values());
+}
+
+export function deleteRoom(roomId: string): void {
+  ROOMS.delete(roomId);
 }
