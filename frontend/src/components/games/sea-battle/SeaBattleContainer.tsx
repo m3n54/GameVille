@@ -5,41 +5,33 @@ import { Socket } from 'socket.io-client';
 import { motion, AnimatePresence } from 'framer-motion';
 import Grid from './Grid';
 import Button from '@/components/ui/Button';
-import type { SeaBattleState, ServerToClientEvents, ClientToServerEvents } from '@/types';
+import type { SeaBattlePlayerView, ServerToClientEvents, ClientToServerEvents } from '@/types';
 
 interface Props {
   socket: Socket<ServerToClientEvents, ClientToServerEvents>;
-  state: SeaBattleState | null;
+  state: SeaBattlePlayerView | null;
 }
 
+// C1: the server now sends each player their OWN projection (myGrid/enemyGrid/
+// myShips/enemySunkShips). The old client received both raw grids and stripped
+// enemy ships locally — pointless once the payload itself was the leak.
 export default function SeaBattleContainer({ socket, state: initial }: Props) {
-  const [gameState, setGameState] = useState<SeaBattleState | null>(initial);
-  const [myGrid, setMyGrid] = useState<string[][]>([]);
-  const [enemyGrid, setEnemyGrid] = useState<string[][]>([]);
+  const [gameState, setGameState] = useState<SeaBattlePlayerView | null>(initial);
   const [message, setMessage] = useState('');
   const [lastShot, setLastShot] = useState<{ row: number; col: number } | null>(null);
   const myId = socket.id;
 
-  // Sync full game state
+  // Sync per-player view
   useEffect(() => {
     if (!socket) return;
 
     const handleState = (state: unknown) => {
-      const s = state as SeaBattleState;
-      setGameState(s);
-
-      if (myId === s.player1Id) {
-        setMyGrid(s.grid1 ?? []);
-        setEnemyGrid(getEnemyView(s.grid2));
-      } else {
-        setMyGrid(s.grid2 ?? []);
-        setEnemyGrid(getEnemyView(s.grid1));
-      }
+      setGameState(state as SeaBattlePlayerView);
     };
 
     socket.on('game:state', handleState);
     return () => { socket.off('game:state', handleState); };
-  }, [socket, myId]);
+  }, [socket]);
 
   // React to game events
   useEffect(() => {
@@ -49,12 +41,10 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
       const action = data as {
         type: string;
         nextPlayerId?: string;
-        playerId?: string;
         row?: number;
         col?: number;
         hit?: boolean;
         sunkShip?: string | null;
-        firstTurn?: string;
       };
 
       if (action.type === 'fireResult') {
@@ -92,23 +82,17 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
   }, [socket]);
 
   const fire = useCallback((row: number, col: number) => {
+    const grid = gameState?.enemyGrid;
     if (!gameState || gameState.phase !== 'playing') return;
-    if (!enemyGrid[row] || enemyGrid[row][col] !== ' ') return;
+    // Enemy grid cells are only 'H'/'M'/' ' — an unfired cell is ' '
+    // ('S' never reaches us while playing).
+    if (!grid || !grid[row] || grid[row][col] !== ' ') return;
     socket.emit('game:action', { type: 'fire', payload: { row, col } });
-  }, [socket, gameState, enemyGrid]);
+  }, [socket, gameState]);
 
   useEffect(() => {
-    if (initial) {
-      setGameState(initial);
-      if (myId === initial.player1Id) {
-        setMyGrid(initial.grid1 ?? []);
-        setEnemyGrid(getEnemyView(initial.grid2));
-      } else {
-        setMyGrid(initial.grid2 ?? []);
-        setEnemyGrid(getEnemyView(initial.grid1));
-      }
-    }
-  }, [initial, myId]);
+    setGameState(initial);
+  }, [initial]);
 
   if (!gameState) {
     return (
@@ -118,14 +102,14 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
     );
   }
 
+  const myGrid = gameState.myGrid ?? [];
+  const enemyGrid = gameState.enemyGrid ?? [];
+  const myShips = gameState.myShips ?? [];
+
   const isMyTurn = !!gameState.currentTurn && gameState.currentTurn === myId;
   const isSetup = gameState.phase === 'setup';
   const isOver = gameState.phase === 'finished';
-  const ships1 = gameState.ships1 ?? [];
-  const ships2 = gameState.ships2 ?? [];
-  const myShipsPlaced = myId === gameState.player1Id
-    ? ships1.length > 0
-    : ships2.length > 0;
+  const myShipsPlaced = myShips.length > 0;
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -164,9 +148,7 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
           <Grid grid={myGrid} isOwn={true} showShips={true} disabled={true} />
           <p className="text-xs text-cute-muted mt-1">
             Kapal:{' '}
-            {myId === gameState.player1Id
-              ? ships1.map(s => s.type).join(', ') || 'Belum ada'
-              : ships2.map(s => s.type).join(', ') || 'Belum ada'}
+            {myShips.map(s => s.type).join(', ') || 'Belum ada'}
           </p>
         </div>
 
@@ -182,21 +164,11 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
             disabled={!isMyTurn || isSetup || isOver}
           />
           <p className="text-xs text-cute-muted mt-1">
-            {isMyTurn && !isSetup && !isOver && 'Klik grid untuk menembak!'}
+            Kapal lawan tenggelam: {gameState.enemySunkShips ?? 0}/5
+            {isMyTurn && !isSetup && !isOver && ' · Klik grid untuk menembak!'}
           </p>
         </div>
       </div>
     </div>
-  );
-}
-
-function getEnemyView(grid: string[][] | undefined): string[][] {
-  if (!grid) return [];
-  return grid.map(row =>
-    row.map(cell => {
-      if (cell === 'H') return 'H';
-      if (cell === 'M') return 'M';
-      return ' ';
-    }),
   );
 }

@@ -16,7 +16,7 @@ export class SnakesLaddersEngine extends BaseGame {
 
   // Disconnection handling: prune the leaver from the players array so the turn
   // never rotates to a ghost. Last player standing wins by forfeit.
-  removePlayer(state: SnakesLaddersState, playerId: string): { playerOrder: string[]; gameOver?: boolean } {
+  override removePlayer(state: SnakesLaddersState, playerId: string): { playerOrder: string[]; gameOver?: boolean } {
     if (state.winner) return { playerOrder: state.players.map(p => p.id) };
     const idx = state.players.findIndex(p => p.id === playerId);
     if (idx === -1) return { playerOrder: state.players.map(p => p.id) };
@@ -40,7 +40,7 @@ export class SnakesLaddersEngine extends BaseGame {
       players: playerOrder.map((id, i) => ({
         id,
         position: 0,
-        color: colors[i % colors.length],
+        color: colors[i % colors.length] ?? '#FF6B6B',
       })),
       currentTurn: 0,
       diceValue: null,
@@ -68,6 +68,7 @@ export class SnakesLaddersEngine extends BaseGame {
       state.diceValue = dice;
 
       const player = state.players[playerIndex];
+      if (!player) return { newState: state, events: [] };
       let newPos = player.position + dice;
 
       // Bounce back if exceeds 99 (max tile)
@@ -120,10 +121,13 @@ export class SnakesLaddersEngine extends BaseGame {
         // Next turn
         state.currentTurn = (state.currentTurn + 1) % state.players.length;
         state.diceValue = null;
-        events.push({
-          type: 'turnChange',
-          data: { nextPlayerId: state.players[state.currentTurn].id },
-        });
+        const next = state.players[state.currentTurn];
+        if (next) {
+          events.push({
+            type: 'turnChange',
+            data: { nextPlayerId: next.id },
+          });
+        }
       }
     }
 

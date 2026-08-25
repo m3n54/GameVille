@@ -44,12 +44,13 @@ function generateAutoPlacement(): { grid: string[][]; ships: Ship[] } {
       for (let i = 0; i < size; i++) {
         const r = horizontal ? row : row + i;
         const c = horizontal ? col + i : col;
-        if (grid[r][c] !== ' ') { canPlace = false; break; }
+        if (grid[r]?.[c] !== ' ') { canPlace = false; break; }
         for (let dr = -1; dr <= 1; dr++) {
           for (let dc = -1; dc <= 1; dc++) {
             const nr = r + dr;
             const nc = c + dc;
-            if (nr >= 0 && nr < 10 && nc >= 0 && nc < 10 && grid[nr][nc] !== ' ') {
+            const ng = grid[nr]?.[nc];
+            if (nr >= 0 && nr < 10 && nc >= 0 && nc < 10 && ng && ng !== ' ') {
               canPlace = false;
             }
           }
@@ -58,9 +59,12 @@ function generateAutoPlacement(): { grid: string[][]; ships: Ship[] } {
       }
 
       if (canPlace) {
-        for (const [r, c] of cells) grid[r][c] = 'S';
+        for (const [r, c] of cells) {
+          const row = grid[r];
+          if (row) row[c] = 'S';
+        }
         const shipTypes: Record<number, string> = { 4: 'Battleship', 3: 'Cruiser', 2: 'Destroyer', 1: 'Submarine' };
-        ships.push({ type: shipTypes[size] || 'Ship', cells, hits: 0 });
+        ships.push({ type: shipTypes[size] ?? 'Ship', cells, hits: 0 });
         placed = true;
       }
       attempts++;
@@ -75,14 +79,14 @@ export class SeaBattleEngine extends BaseGame {
 
   createInitialState(playerOrder: string[]): SeaBattleState {
     return {
-      player1Id: playerOrder[0],
-      player2Id: playerOrder[1],
+      player1Id: playerOrder[0] ?? '',
+      player2Id: playerOrder[1] ?? '',
       grid1: createEmptyGrid(),
       grid2: createEmptyGrid(),
       ships1: [],
       ships2: [],
       phase: 'setup',
-      currentTurn: playerOrder[0],
+      currentTurn: playerOrder[0] ?? '',
       winner: null,
     };
   }
@@ -137,7 +141,7 @@ export class SeaBattleEngine extends BaseGame {
       const targetShips = playerId === state.player1Id ? 'ships2' : 'ships1';
 
       // Check if already fired there
-      const cellValue = state[targetGrid][row][col];
+      const cellValue = state[targetGrid][row]?.[col];
       if (cellValue !== ' ' && cellValue !== 'S') {
         return { newState: state, events: [{ type: 'error', data: { message: 'Sudah ditembak!' } }] };
       }
@@ -146,7 +150,8 @@ export class SeaBattleEngine extends BaseGame {
       let sunkShip: string | null = null;
 
       if (cellValue === 'S') {
-        state[targetGrid][row][col] = 'H';
+        const row1 = state[targetGrid][row];
+        if (row1) row1[col] = 'H';
         hit = true;
 
         for (const ship of state[targetShips]) {
@@ -159,7 +164,8 @@ export class SeaBattleEngine extends BaseGame {
           }
         }
       } else {
-        state[targetGrid][row][col] = 'M';
+        const row1 = state[targetGrid][row];
+        if (row1) row1[col] = 'M';
       }
 
       events.push({
@@ -182,7 +188,7 @@ export class SeaBattleEngine extends BaseGame {
   }
 
   // Disconnection handling: sea battle is strictly 1v1 — the remaining player wins by forfeit.
-  removePlayer(state: SeaBattleState, playerId: string): { playerOrder: string[]; gameOver?: boolean } {
+  override removePlayer(state: SeaBattleState, playerId: string): { playerOrder: string[]; gameOver?: boolean } {
     if (state.winner || state.phase === 'finished') return { playerOrder: [] };
     const other = playerId === state.player1Id ? state.player2Id : state.player1Id;
     state.winner = other;

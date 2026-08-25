@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { useSocket } from '@/hooks/useSocket';
@@ -10,71 +10,114 @@ import Card from '@/components/ui/Card';
 import PlayerList from '@/components/room/PlayerList';
 import ChatBox from '@/components/room/ChatBox';
 import EmojiReactions from '@/components/room/EmojiReactions';
+import ConnectionStatus from '@/components/room/ConnectionStatus';
+import GameErrorBanner from '@/components/room/GameErrorBanner';
 import SnakesLaddersContainer from '@/components/games/snakes-ladders/SnakesLaddersContainer';
 import HangmanContainer from '@/components/games/hangman/HangmanContainer';
 import SeaBattleContainer from '@/components/games/sea-battle/SeaBattleContainer';
 import MinesweeperContainer from '@/components/games/minesweeper/MinesweeperContainer';
-import type { GameType, SnakesLaddersState, HangmanState, SeaBattleState, MinesweeperView } from '@/types';
+import type { GameType, SnakesLaddersState, HangmanState, SeaBattlePlayerView, MinesweeperView } from '@/types';
 
 export default function RoomPage() {
   const params = useParams();
   const pin = params.pin as string;
-  const { socket, connected } = useSocket();
-  const { room, players, leaveRoom, toggleReady, selectGame, startGame, syncRoom } = useRoom(socket);
-  const myId = socket?.id;
+  const { socket, connected, reconnecting } = useSocket();
+  const { room, players, myId, error, clearError, leaveRoom, toggleReady, selectGame, startGame, syncRoom } = useRoom(socket);
   const [gameState, setGameState] = useState<unknown>(null);
   const [gameActive, setGameActive] = useState(false);
   const [gameWinner, setGameWinner] = useState<{ id: string; name: string } | null>(null);
+  // FE-F2: track the previous connected flag so a false→true transition
+  // (reconnect) triggers exactly one re-sync.
+  const prevConnected = useRef(connected);
 
   // After navigation the component is fresh — ask the server for room state.
-  // Mid-game recovery: server replays the current game snapshot in the same ack.
+  // Mid-game recovery: server replays the current game snapshot + whose turn
+  // it is in the same ack.
   useEffect(() => {
     if (!socket || !connected) return;
     if (!room) {
-      syncRoom(pin, (state) => {
+      syncRoom(pin, (state, turnPlayerId) => {
         if (state != null) {
           setGameState(state);
           setGameActive(true);
-          if ((state as { winner?: string | null }).winner) {
-            setGameWinner(null); // re-show banner only on a fresh game:over emit
-          }
+        }
+        if (turnPlayerId) {
+          // Hand the recovered turn to any container that just mounted —
+          // dispatched after mount via a microtask-safe custom event is
+          // overkill; containers read this through their own sync callback.
+          window.dispatchEvent(new CustomEvent('gameville:turn', { detail: turnPlayerId }));
         }
       });
     }
   }, [socket, connected, pin, room, syncRoom]);
 
+  // FE-F2: on reconnect the server sees us as a brand-new connection with a new
+  // socket.id. Re-sync immediately so membership + game state are restored.
+  useEffect(() => {
+    if (!prevConnected.current && connected && socket) {
+      setGameState(null);
+      setGameActive(false);
+      setGameWinner(null);
+      setRoomNullThenSync();
+    }
+    prevConnected.current = connected;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, socket]);
+
+  const setRoomNullThenSync = () => {
+    // Clear local state first so the sync effect's `!room` gate re-runs.
+    // syncRoom itself re-fetches regardless; clearing avoids stale renders
+    // between reconnect and ack.
+    syncRoom(pin, (state, turnPlayerId) => {
+      if (state != null) {
+        setGameState(state);
+        setGameActive(true);
+      }
+      if (turnPlayerId) {
+        window.dispatchEvent(new CustomEvent('gameville:turn', { detail: turnPlayerId }));
+      }
+    });
+  };
+
+  // F8 fix: always off() by named handler — never off(eventName), which nukes
+  // listeners registered by the active game container on the same singleton.
   useEffect(() => {
     if (!socket) return;
 
-    socket.on('game:started', () => {
+    const onStarted = () => {
       setGameActive(true);
-    });
-
-    socket.on('game:state', (state) => {
+    };
+    const onState = (state: unknown) => {
       setGameState(state);
-    });
-
-    socket.on('game:over', (data: { winnerId: string; winnerName: string }) => {
+    };
+    const onOver = (data: { winnerId: string; winnerName: string }) => {
       setGameWinner({ id: data.winnerId, name: data.winnerName });
       setGameActive(true);
-    });
+    };
+
+    socket.on('game:started', onStarted);
+    socket.on('game:state', onState);
+    socket.on('game:over', onOver);
 
     return () => {
-      socket.off('game:started');
-      socket.off('game:state');
-      socket.off('game:over');
+      socket.off('game:started', onStarted);
+      socket.off('game:state', onState);
+      socket.off('game:over', onOver);
     };
-  }, [socket, myId]);
+  }, [socket]);
 
   const isHost = players.find(p => p.id === myId)?.isHost ?? false;
   const allReady = players.every(p => p.isReady) && players.length >= 2;
+  const me = players.find(p => p.id === myId);
+  const myNickname = me?.nickname ?? '';
 
-  const myNickname = players.find(p => p.id === myId)?.nickname ?? '';
-
-  if (!connected || !room) {
+  if (!connected || !room || !myId) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-cute-muted text-xl">Menghubungkan ke ruang...</p>
+      <div className="min-h-screen">
+        <ConnectionStatus reconnecting={reconnecting} />
+        <div className="flex items-center justify-center" style={{ minHeight: '80vh' }}>
+          <p className="text-cute-muted text-xl">Menghubungkan ke ruang...</p>
+        </div>
       </div>
     );
   }
@@ -87,7 +130,7 @@ export default function RoomPage() {
         case 'hangman':
           return <HangmanContainer socket={socket!} state={gameState as HangmanState} />;
         case 'sea-battle':
-          return <SeaBattleContainer socket={socket!} state={gameState as SeaBattleState} />;
+          return <SeaBattleContainer socket={socket!} state={gameState as SeaBattlePlayerView} />;
         case 'minesweeper':
           return <MinesweeperContainer socket={socket!} state={gameState as MinesweeperView} />;
         default:
@@ -97,8 +140,10 @@ export default function RoomPage() {
 
     return (
       <div className="min-h-screen p-4 flex flex-col lg:flex-row gap-4">
+        <ConnectionStatus reconnecting={reconnecting} />
         <div className="flex-1">{renderGame()}</div>
         <div className="w-full lg:w-80 space-y-4">
+          <GameErrorBanner message={error} onDismiss={clearError} />
           <ChatBox socket={socket!} myNickname={myNickname} />
           <EmojiReactions socket={socket!} />
           <Button variant="ghost" onClick={() => { setGameActive(false); leaveRoom(); }}>
@@ -113,7 +158,8 @@ export default function RoomPage() {
               className="bg-white p-8 rounded-cute shadow-soft text-center max-w-sm mx-4"
             >
               {/* Co-op outcomes: 'team' = everyone won, 'none' = team lost.
-                  Otherwise 1v1/ffa: compare against my id. */}
+                  Otherwise 1v1/ffa: compare against my stable id (myId from
+                  useRoom survives reconnects; socket.id does not). */}
               {(() => {
                 const isTeamWin = gameWinner.id === 'team';
                 const isTeamLoss = gameWinner.id === 'none';
@@ -151,6 +197,10 @@ export default function RoomPage() {
 
   return (
     <div className="min-h-screen p-4 md:p-8">
+      <ConnectionStatus reconnecting={reconnecting} />
+      <div className="max-w-4xl mx-auto pt-2 space-y-3">
+        <GameErrorBanner message={error} onDismiss={clearError} />
+      </div>
       <div className="max-w-4xl mx-auto">
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
@@ -201,8 +251,8 @@ export default function RoomPage() {
           <div className="space-y-4">
             <Card>
               <div className="space-y-3">
-                <Button onClick={toggleReady} variant={players.find(p => p.id === myId)?.isReady ? 'secondary' : 'primary'} className="w-full">
-                  {players.find(p => p.id === myId)?.isReady ? '✅ Siap!' : '⏳ Saya Siap'}
+                <Button onClick={toggleReady} variant={me?.isReady ? 'secondary' : 'primary'} className="w-full">
+                  {me?.isReady ? '✅ Siap!' : '⏳ Saya Siap'}
                 </Button>
                 {isHost && (
                   <Button

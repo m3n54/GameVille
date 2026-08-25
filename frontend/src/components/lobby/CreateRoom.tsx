@@ -6,15 +6,19 @@ import Input from '@/components/ui/Input';
 
 interface CreateRoomProps {
   onCreate: (name: string, nickname: string, color: string, emoji: string) => void;
+  /** Server/validation error surfaced from useRoom — rendered inline. */
+  error?: string | null;
+  /** Disables submit while a create ack is in flight. */
+  submitting?: boolean;
 }
 
 const COLORS = ['#FF9BB5', '#A8D8EA', '#B5EAD7', '#FFD3B6', '#C3AED6', '#FFB347'];
 const EMOJIS = ['🦊', '🐰', '🐼', '🐱', '🦁', '🐸', '🐵', '🐶'];
 
-export default function CreateRoom({ onCreate }: CreateRoomProps) {
+export default function CreateRoom({ onCreate, error, submitting = false }: CreateRoomProps) {
   const [nickname, setNickname] = useState('');
-  const [color, setColor] = useState(COLORS[0]);
-  const [emoji, setEmoji] = useState(EMOJIS[0]);
+  const [color, setColor] = useState<string>(COLORS[0] ?? '#FF9BB5');
+  const [emoji, setEmoji] = useState<string>(EMOJIS[0] ?? '🦊');
 
   return (
     <div className="space-y-4">
@@ -54,12 +58,20 @@ export default function CreateRoom({ onCreate }: CreateRoomProps) {
           ))}
         </div>
       </div>
+      {error && (
+        <p role="alert" className="text-sm text-red-500 bg-red-50 rounded-lg px-3 py-2">
+          ⚠️ {error}
+        </p>
+      )}
       <Button
-        onClick={() => onCreate(`Ruang ${nickname || 'Player'}`, nickname || 'Player', color, emoji)}
-        disabled={!nickname.trim()}
+        onClick={() => {
+          const nick = nickname.trim() || 'Player';
+          onCreate(`Ruang ${nick}`, nick, color, emoji);
+        }}
+        disabled={!nickname.trim() || submitting}
         className="w-full"
       >
-        🎮 Buat Ruang Baru
+        {submitting ? '⏳ Membuat...' : '🎮 Buat Ruang Baru'}
       </Button>
     </div>
   );

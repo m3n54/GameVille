@@ -8,6 +8,9 @@ services:
     envVars:
       - key: PORT
         value: 3001
+      # Comma-separated origins. Wildcard suffix `https://*.vercel.app` is supported
+      # by the server's `isOriginAllowed` matcher — covers every preview deployment
+      # without enumerating each branch URL.
       - key: CORS_ORIGIN
-        value: https://gameville.vercel.app
+        value: https://gameville.vercel.app,https://*.vercel.app
     healthCheckPath: /health

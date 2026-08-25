@@ -6,16 +6,20 @@ import Input from '@/components/ui/Input';
 
 interface JoinRoomProps {
   onJoin: (pin: string, nickname: string, color: string, emoji: string) => void;
+  /** Server/validation error surfaced from useRoom — rendered inline. */
+  error?: string | null;
+  /** Disables submit while a join ack is in flight. */
+  submitting?: boolean;
 }
 
 const COLORS = ['#FF9BB5', '#A8D8EA', '#B5EAD7', '#FFD3B6', '#C3AED6', '#FFB347'];
 const EMOJIS = ['🦊', '🐰', '🐼', '🐱', '🦁', '🐸', '🐵', '🐶'];
 
-export default function JoinRoom({ onJoin }: JoinRoomProps) {
+export default function JoinRoom({ onJoin, error, submitting = false }: JoinRoomProps) {
   const [pin, setPin] = useState('');
   const [nickname, setNickname] = useState('');
-  const [color, setColor] = useState(COLORS[0]);
-  const [emoji, setEmoji] = useState(EMOJIS[0]);
+  const [color, setColor] = useState<string>(COLORS[0] ?? '#FF9BB5');
+  const [emoji, setEmoji] = useState<string>(EMOJIS[0] ?? '🦊');
 
   return (
     <div className="space-y-4">
@@ -60,12 +64,20 @@ export default function JoinRoom({ onJoin }: JoinRoomProps) {
           ))}
         </div>
       </div>
+      {error && (
+        <p role="alert" className="text-sm text-red-500 bg-red-50 rounded-lg px-3 py-2">
+          ⚠️ {error}
+        </p>
+      )}
       <Button
-        onClick={() => onJoin(pin, nickname || 'Player', color, emoji)}
-        disabled={pin.length !== 6 || !nickname.trim()}
+        onClick={() => {
+          const nick = nickname.trim() || 'Player';
+          onJoin(pin, nick, color, emoji);
+        }}
+        disabled={pin.length !== 6 || !nickname.trim() || submitting}
         className="w-full"
       >
-        🔗 Gabung Ruang
+        {submitting ? '⏳ Bergabung...' : '🔗 Gabung Ruang'}
       </Button>
     </div>
   );

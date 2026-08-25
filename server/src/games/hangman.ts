@@ -70,9 +70,9 @@ export class HangmanEngine extends BaseGame {
       state.phase = 'playing';
 
       const categories = Object.keys(WORDS[lang]);
-      const category = categories[Math.floor(Math.random() * categories.length)];
-      const words = WORDS[lang][category];
-      const word = words[Math.floor(Math.random() * words.length)];
+      const category = categories[Math.floor(Math.random() * categories.length)] ?? 'Hewan';
+      const words = WORDS[lang][category] ?? [];
+      const word = words[Math.floor(Math.random() * words.length)] ?? '';
       state.word = word;
       state.category = category;
       state.wordLength = word.length;
@@ -154,7 +154,7 @@ export class HangmanEngine extends BaseGame {
 
   // Disconnection handling: prune the leaver; with 1 player left the co-op game
   // continues solo (turn rotation stops, but guessing stays open).
-  removePlayer(
+  override removePlayer(
     state: HangmanExtendedState,
     playerId: string,
   ): { playerOrder: string[]; gameOver?: boolean } {

@@ -35,5 +35,5 @@ export function tileColor(tile: number): string {
   const row = Math.floor(tile / GRID_SIZE);
   const colRaw = tile % GRID_SIZE;
   const col = row % 2 === 1 ? GRID_SIZE - 1 - colRaw : colRaw;
-  return TILE_COLORS[(row + col) % TILE_COLORS.length];
+  return TILE_COLORS[(row + col) % TILE_COLORS.length] ?? '#FFE4EC';
 }

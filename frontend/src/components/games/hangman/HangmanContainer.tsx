@@ -83,13 +83,8 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
 
     socket.on('game:action', handleAction);
 
-    // Engine errors (wrong turn, already-guessed) arrive as room:error
-    const handleError = (err: { message: string }) => setMessage(`⚠️ ${err.message}`);
-    socket.on('room:error', handleError);
-
     return () => {
       socket.off('game:action', handleAction);
-      socket.off('room:error', handleError);
     };
   }, [socket, myId]);
 
@@ -103,10 +98,14 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
     [socket, gameState],
   );
 
-  // Keyboard support
+  // Keyboard support — gated on the same turn/game-over checks as the buttons
+  // (F9: typing used to bypass the disabled state entirely).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!gameState || (gameState.phase ?? 'config') === 'config') return;
+      if (gameState.winner != null) return;
+      // Strict turn check inline — matches the render-level isMyTurn below
+      if (currentPlayerId == null || currentPlayerId !== myId) return;
       const key = e.key.toUpperCase();
       if (ALPHABET.includes(key)) {
         guessLetter(key);
@@ -114,7 +113,7 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [gameState, guessLetter]);
+  }, [gameState, guessLetter, currentPlayerId, myId]);
 
   // Config phase — host belum pilih bahasa
   if (
@@ -160,9 +159,9 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
     );
   }
 
-  // Unknown current player (e.g. before first turn event arrives) → optimistic;
-  // server remains authoritative anyway
-  const isMyTurn = currentPlayerId == null || currentPlayerId === myId;
+  // Strict turn check (FE-F3): unknown ≠ my turn. The old optimistic default
+  // let everyone act (and type) before the first turn event arrived.
+  const isMyTurn = currentPlayerId != null && currentPlayerId === myId;
   const isOver = gameState.winner != null;
   const guessedLetters = gameState.guessedLetters || [];
   const correctLetters = gameState.correctLetters || [];

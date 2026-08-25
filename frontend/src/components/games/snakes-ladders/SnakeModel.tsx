@@ -56,8 +56,10 @@ export default function SnakeModel({ headTile, tailTile }: SnakeModelProps): JSX
     });
 
     // Heading from second-to-first path point so the head faces along the body.
-    const second = points[1];
-    const headingAngle = Math.atan2(second.z - points[0].z, second.x - points[0].x);
+    type PP = { x: number; y: number; z: number };
+    const first: PP = points[0] ?? { x: 0, y: 0, z: 0 };
+    const second: PP = points[1] ?? first;
+    const headingAngle = Math.atan2(second.z - first.z, second.x - first.x);
 
     return { segments: segs, headPosition: head, heading: headingAngle };
   }, [headTile, tailTile]);

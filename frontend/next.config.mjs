@@ -1,9 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
-  env: {
-    NEXT_PUBLIC_SERVER_URL: process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3001',
-  },
+  // NEXT_PUBLIC_SERVER_URL is read directly in lib/socket.ts (with a localhost
+  // dev fallback + production warning). The old env block here baked the
+  // localhost fallback into the build, hiding a misconfigured deployment.
 };
 
 export default nextConfig;

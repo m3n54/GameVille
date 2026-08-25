@@ -100,9 +100,11 @@ export class MinesweeperEngine extends BaseGame {
         changedCells.push({ row, col, state: 'revealed', adjacent: cell.adjacent, exploded: true });
         for (let r = 0; r < state.rows; r++) {
           for (let c = 0; c < state.cols; c++) {
-            if ((r !== row || c !== col) && state.grid[r][c].hasBomb && state.grid[r][c].state !== 'revealed') {
-              state.grid[r][c].state = 'revealed';
-              changedCells.push({ row: r, col: c, state: 'revealed', adjacent: state.grid[r][c].adjacent });
+            const cb = state.grid[r]?.[c];
+            if (!cb) continue;
+            if ((r !== row || c !== col) && cb.hasBomb && cb.state !== 'revealed') {
+              cb.state = 'revealed';
+              changedCells.push({ row: r, col: c, state: 'revealed', adjacent: cb.adjacent });
             }
           }
         }
@@ -194,7 +196,7 @@ export class MinesweeperEngine extends BaseGame {
   // 'playing' while the board awaits its config action, so a disconnect in that
   // window used to leave a ghost in the rotation. With 1 player left the co-op
   // game can still continue solo (win/lose rules unchanged) — no forced game over.
-  removePlayer(
+  override removePlayer(
     state: MinesweeperExtendedState,
     playerId: string,
   ): { playerOrder: string[]; gameOver?: boolean } {
@@ -246,16 +248,18 @@ function generateGrid(state: MinesweeperExtendedState): void {
   while (placed < state.bombCount) {
     const r = Math.floor(Math.random() * state.rows);
     const c = Math.floor(Math.random() * state.cols);
-    if (!state.grid[r][c].hasBomb) {
-      state.grid[r][c].hasBomb = true;
-      placed++;
-    }
+    const cell = state.grid[r]?.[c];
+    if (!cell || cell.hasBomb) continue;
+    cell.hasBomb = true;
+    placed++;
   }
 
   // Adjacent counts
   for (let r = 0; r < state.rows; r++) {
     for (let c = 0; c < state.cols; c++) {
-      state.grid[r][c].adjacent = countAdjacent(state, r, c);
+      const cell = state.grid[r]?.[c];
+      if (!cell) continue;
+      cell.adjacent = countAdjacent(state, r, c);
     }
   }
 
@@ -269,7 +273,8 @@ function countAdjacent(state: MinesweeperExtendedState, row: number, col: number
       if (dr === 0 && dc === 0) continue;
       const r = row + dr;
       const c = col + dc;
-      if (r >= 0 && r < state.rows && c >= 0 && c < state.cols && state.grid[r][c].hasBomb) {
+      const cell = state.grid[r]?.[c];
+      if (r >= 0 && r < state.rows && c >= 0 && c < state.cols && cell?.hasBomb) {
         count++;
       }
     }
@@ -294,7 +299,8 @@ function revealCascade(
     if (visited.has(key)) continue;
     visited.add(key);
 
-    const cell = state.grid[r][c];
+    const cell = state.grid[r]?.[c];
+    if (!cell) continue;
     if (cell.state === 'revealed' || cell.state === 'flagged' || cell.hasBomb) continue;
 
     cell.state = 'revealed';

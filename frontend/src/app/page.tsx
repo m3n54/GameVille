@@ -9,7 +9,7 @@ import { useRoom } from '@/hooks/useRoom';
 
 export default function HomePage() {
   const { socket } = useSocket();
-  const { createRoom, joinRoom } = useRoom(socket);
+  const { createRoom, joinRoom, error, submitting } = useRoom(socket);
 
   return (
     <main className="min-h-screen flex flex-col items-center justify-center p-4">
@@ -27,11 +27,11 @@ export default function HomePage() {
 
       <div className="flex flex-col md:flex-row gap-6 w-full max-w-2xl">
         <Card title="🆕 Buat Ruang Baru">
-          <CreateRoom onCreate={createRoom} />
+          <CreateRoom onCreate={createRoom} error={error} submitting={submitting} />
         </Card>
 
         <Card title="🔗 Masuk Ruang">
-          <JoinRoom onJoin={joinRoom} />
+          <JoinRoom onJoin={joinRoom} error={error} submitting={submitting} />
         </Card>
       </div>
     </main>

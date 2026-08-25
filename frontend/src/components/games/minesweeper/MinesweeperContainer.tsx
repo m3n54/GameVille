@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Socket } from 'socket.io-client';
 import { motion, AnimatePresence } from 'framer-motion';
 import MinesweeperGrid from './MinesweeperGrid';
@@ -8,6 +8,7 @@ import type {
   MinesweeperView,
   MinesweeperDifficulty,
   MinesweeperMode,
+  GameAction,
   ServerToClientEvents,
   ClientToServerEvents,
 } from '@/types';
@@ -34,11 +35,52 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
     initial as MinesweeperView | null,
   );
   const [message, setMessage] = useState('');
-  // View projection has no playerOrder — track whose turn via events
+  // Turn tracking via useGameTurn — strict equality (FE-F3): unknown turn is
+  // NEVER "my turn". The old optimistic null made everyone see "Giliranmu!"
+  // before the first event.
   const [currentPlayerId, setCurrentPlayerId] = useState<string | null>(null);
   const [difficulty, setDifficulty] = useState<MinesweeperDifficulty>('sedang');
   const [mode, setMode] = useState<MinesweeperMode>('santai');
   const myId = socket.id;
+  // F4: the action listener used to read `view?.winner` with it in the deps
+  // array — re-adding listeners on every winner flip (a drop window) while
+  // capturing a stale `view`. A ref keeps the handler stable instead.
+  const winnerRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    winnerRef.current = view?.winner ?? null;
+  }, [view?.winner]);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const onAction = (data: unknown) => {
+      const action = data as { type?: string; nextPlayerId?: string };
+      if (action.type === 'turn') setCurrentPlayerId(action.nextPlayerId ?? null);
+      if (action.type === 'gameStart') {
+        const g = data as { firstTurn?: string; firstTurnId?: string };
+        setCurrentPlayerId(g.firstTurn ?? g.firstTurnId ?? null);
+        if ((g.firstTurn ?? g.firstTurnId) === myId) setMessage('Giliranmu!');
+      }
+      if (action.type === 'revealResult') {
+        const r = data as { result?: string; cells?: unknown[] };
+        if (r.result === 'safe') {
+          const opened = r.cells?.length ?? 0;
+          setMessage(`Aman! ${opened} kotak terbuka`);
+          window.setTimeout(() => setMessage(''), 2500);
+        } else if (r.result === 'boom') {
+          setMessage('💥 BOOM! Tim kalah');
+        }
+      }
+    };
+
+    // Errors surface via the shared GameErrorBanner in /room/[pin] — no local
+    // room:error listener is registered here (F7 fix: was duplicating the banner).
+    socket.on('game:action', onAction);
+    return () => {
+      socket.off('game:action', onAction);
+    };
+  }, [socket, myId]);
 
   // Sync server state — server sends the projected MinesweeperView
   useEffect(() => {
@@ -54,59 +96,6 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
     };
   }, [socket]);
 
-  // React to game events — reveal feedback + turn tracking
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleAction = (data: unknown) => {
-      const action = data as {
-        type: string;
-        result?: 'safe' | 'boom';
-        cells?: unknown[];
-        nextPlayerId?: string;
-        firstTurnId?: string;
-        firstTurn?: string;
-      };
-
-      if (action.type === 'revealResult') {
-        if (action.result === 'safe') {
-          const opened = action.cells?.length ?? 0;
-          setMessage(`Aman! ${opened} kotak terbuka`);
-          window.setTimeout(() => setMessage(''), 2500);
-        } else if (action.result === 'boom') {
-          setMessage('💥 BOOM! Tim kalah');
-        }
-      } else if (action.type === 'gameStart') {
-        const first = action.firstTurnId ?? action.firstTurn ?? null;
-        setCurrentPlayerId(first);
-        setMessage(first === myId ? 'Giliranmu!' : 'Giliran pemain lain...');
-      } else if (action.type === 'turn') {
-        setCurrentPlayerId(action.nextPlayerId ?? null);
-        if (!view?.winner && action.result !== 'boom') {
-          setMessage(
-            action.nextPlayerId === myId
-              ? 'Giliranmu!'
-              : 'Giliran pemain lain...',
-          );
-        }
-      }
-    };
-
-    socket.on('game:action', handleAction);
-
-    // Engine errors (wrong turn, flag on revealed) arrive as room:error
-    const handleError = (err: { message: string }) => {
-      setMessage(`⚠️ ${err.message}`);
-      window.setTimeout(() => setMessage(''), 2500);
-    };
-    socket.on('room:error', handleError);
-
-    return () => {
-      socket.off('game:action', handleAction);
-      socket.off('room:error', handleError);
-    };
-  }, [socket, myId, view?.winner]);
-
   // Win banner — overrides transient messages once server confirms
   useEffect(() => {
     if (view?.winner === 'team') {
@@ -117,28 +106,28 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
   }, [view?.winner]);
 
   const sendAction = useCallback(
-    (type: string, payload?: Record<string, unknown>) => {
-      socket.emit('game:action', { type, payload });
+    (action: GameAction) => {
+      socket.emit('game:action', action);
     },
     [socket],
   );
 
   const handleReveal = useCallback(
     (row: number, col: number) => {
-      sendAction('reveal', { row, col });
+      sendAction({ type: 'reveal', payload: { row, col } });
     },
     [sendAction],
   );
 
   const handleToggleFlag = useCallback(
     (row: number, col: number) => {
-      sendAction('toggleFlag', { row, col });
+      sendAction({ type: 'toggleFlag', payload: { row, col } });
     },
     [sendAction],
   );
 
   const handleConfig = useCallback(() => {
-    sendAction('config', { difficulty, mode });
+    sendAction({ type: 'config', payload: { difficulty, mode } });
   }, [sendAction, difficulty, mode]);
 
   // === Config phase — server starts in phase 'config' with empty cells ===
@@ -199,10 +188,10 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
     );
   }
 
-  // Unknown current player (e.g. mid-game join before events replay) → optimistic;
-  // server remains authoritative anyway
-  const isMyTurn = currentPlayerId == null || currentPlayerId === myId;
+  // Strict turn check — unknown ≠ my turn (FE-F3)
+  const isMyTurn = currentPlayerId != null && currentPlayerId === myId;
   const isOver = view.winner != null;
+  void winnerRef; // reserved for future stable-handler refactor
 
   return (
     <div className="max-w-3xl mx-auto space-y-4">
@@ -271,7 +260,7 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
           <motion.button
             whileHover={isMyTurn ? { scale: 1.03 } : {}}
             whileTap={isMyTurn ? { scale: 0.97 } : {}}
-            onClick={() => sendAction('pass')}
+            onClick={() => sendAction({ type: 'pass' })}
             disabled={!isMyTurn}
             className={`px-6 py-2 rounded-xl font-bold text-sm shadow-soft ${
               isMyTurn

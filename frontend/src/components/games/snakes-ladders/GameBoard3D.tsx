@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo, memo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Html } from '@react-three/drei';
 import * as THREE from 'three';
@@ -31,21 +31,31 @@ function buildSpecialTileSet(snakes: [number, number][], ladders: [number, numbe
   return special;
 }
 
-function BoardTile({ index }: { index: number }) {
-  const [x, z] = tileToWorld(index);
-  const base = tileColor(index);
-  const isSpecial = SPECIAL_TILES.has(index);
-  const color = isSpecial ? '#FFE9A8' : base; // warm accent under snakes/ladders
+// Smooth acceleration/deceleration for movement phases
+function easeInOut(t: number): number {
+  return t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+}
 
+// F5 fix: previously these mutated a module-level `SPECIAL_TILES` Set on every
+// render of GameBoard3D, so any state tick from the parent re-rendered ALL 200
+// tiles/snakes/ladders. Memo + module-level local Set eliminates the mutation
+// and React.memo lets unchanged tiles skip re-render.
+interface TileProps {
+  index: number;
+  isSpecial: boolean;
+}
+const BoardTile = memo(function BoardTile({ index, isSpecial }: TileProps) {
+  const [x, z] = tileToWorld(index);
+  const color = isSpecial ? '#FFE9A8' : tileColor(index); // warm accent under snakes/ladders
   return (
     <mesh position={[x, 0, z]} receiveShadow>
       <boxGeometry args={[TILE_SIZE, 0.12, TILE_SIZE]} />
       <meshStandardMaterial color={color} roughness={0.85} />
     </mesh>
   );
-}
+});
 
-function TileNumber({ index }: { index: number }) {
+const TileNumber = memo(function TileNumber({ index }: { index: number }) {
   const [x, z] = tileToWorld(index);
   return (
     <Html position={[x, 0.18, z]} center zIndexRange={[10, 0]}>
@@ -54,7 +64,7 @@ function TileNumber({ index }: { index: number }) {
       </span>
     </Html>
   );
-}
+});
 
 function PlayerPiece({ position, color }: { position: number; color: string }) {
   const groupRef = useRef<THREE.Group>(null);
@@ -157,9 +167,40 @@ function TurnIndicator({ currentTurn, playerColors }: { currentTurn: number; pla
   );
 }
 
+// Static parts (board + decorations) — memoized so player-piece animation ticks
+// don't rebuild the 100 tiles, 100 labels, all snakes and all ladders every frame.
+const StaticBoard = memo(function StaticBoard({
+  snakes,
+  ladders,
+  specialTiles,
+}: {
+  snakes: [number, number][];
+  ladders: [number, number][];
+  specialTiles: Set<number>;
+}) {
+  return (
+    <>
+      {Array.from({ length: 100 }, (_, i) => (
+        <BoardTile key={`t-${i}`} index={i} isSpecial={specialTiles.has(i)} />
+      ))}
+      {Array.from({ length: 100 }, (_, i) => (
+        <TileNumber key={`n-${i}`} index={i} />
+      ))}
+      {snakes.map(([head, tail], i) => (
+        <SnakeModel key={`s-${i}`} headTile={head} tailTile={tail} />
+      ))}
+      {ladders.map(([bottom, top], i) => (
+        <LadderModel key={`l-${i}`} bottomTile={bottom} topTile={top} />
+      ))}
+    </>
+  );
+});
+
 export default function GameBoard3D({ players, snakes, ladders, currentTurn }: GameBoard3DProps) {
-  const specialTiles = buildSpecialTileSet(snakes, ladders);
-  SPECIAL_TILES = specialTiles;
+  // F5: useMemo so the special-tile Set is stable until snakes/ladders actually
+  // change. Previously this was rebuilt + reassigned to a module-level let every
+  // render (every animation tick), defeating React's prop-equality bail-out.
+  const specialTiles = useMemo(() => buildSpecialTileSet(snakes, ladders), [snakes, ladders]);
 
   return (
     <div className="w-full h-[500px] md:h-[600px] bg-gradient-to-b from-sky-50 via-pink-50 to-amber-50 rounded-cute overflow-hidden">
@@ -180,23 +221,10 @@ export default function GameBoard3D({ players, snakes, ladders, currentTurn }: G
           target={[0, 0, 0]}
         />
 
-        {/* Board tiles */}
-        {Array.from({ length: 100 }, (_, i) => (
-          <BoardTile key={`t-${i}`} index={i} />
-        ))}
-        {Array.from({ length: 100 }, (_, i) => (
-          <TileNumber key={`n-${i}`} index={i} />
-        ))}
+        <StaticBoard snakes={snakes} ladders={ladders} specialTiles={specialTiles} />
 
-        {/* Snakes & Ladders */}
-        {snakes.map(([head, tail], i) => (
-          <SnakeModel key={`s-${i}`} headTile={head} tailTile={tail} />
-        ))}
-        {ladders.map(([bottom, top], i) => (
-          <LadderModel key={`l-${i}`} bottomTile={bottom} topTile={top} />
-        ))}
-
-        {/* Player pieces */}
+        {/* Player pieces — animated, kept outside StaticBoard so useFrame ticks
+            don't drag the static prop tree along. */}
         {players.map((p) => (
           <PlayerPiece key={p.id} position={p.position} color={p.color} />
         ))}
@@ -205,12 +233,4 @@ export default function GameBoard3D({ players, snakes, ladders, currentTurn }: G
       </Canvas>
     </div>
   );
-}
-
-// Module-level set consumed by BoardTile (rebuilt each render of GameBoard3D)
-let SPECIAL_TILES = new Set<number>();
-
-// Smooth acceleration/deceleration for movement phases
-function easeInOut(t: number): number {
-  return t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
 }

@@ -1,6 +1,7 @@
 export type {
   GameType, Player, Room,
   ServerToClientEvents, ClientToServerEvents,
-  SnakesLaddersState, HangmanState, SeaBattleState,
-  MinesweeperView, MinesweeperDifficulty, MinesweeperMode,
+  RoomAck, SyncAck, GameAction,
+  SnakesLaddersState, HangmanState, SeaBattleState, SeaBattlePlayerView,
+  MinesweeperView, MinesweeperDifficulty, MinesweeperMode, CellState,
 } from '../../../shared/types';
