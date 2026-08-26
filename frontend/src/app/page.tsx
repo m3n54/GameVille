@@ -31,7 +31,7 @@ export default function HomePage() {
         </Card>
 
         <Card title="🔗 Masuk Ruang">
-          <JoinRoom onJoin={joinRoom} error={error} submitting={submitting} />
+          <JoinRoom onJoin={joinRoom} error={error} submitting={submitting} initialPin="" />
         </Card>
       </div>
     </main>

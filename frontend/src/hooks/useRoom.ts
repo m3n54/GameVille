@@ -142,6 +142,10 @@ export function useRoom(socket: Socket<ServerToClientEvents, ClientToServerEvent
 
   // After navigation or reconnect: same membership asks for room state by PIN.
   // onGameState receives the replayed snapshot + whose turn it is mid-game.
+  // On failure (not a member), we do NOT redirect — /room/[pin] shows its own
+  // join form so the user can join from the URL they pasted. The old
+  // router.push('/') silently sent them back to landing and they clicked
+  // "Buat Ruang Baru" by mistake, creating a fresh room.
   const syncRoom = useCallback((pin: string, onGameState?: (state: unknown, turnPlayerId?: string) => void) => {
     if (!socket) return;
     socket.emit('room:sync', { pin }, (response: SyncAck) => {
@@ -151,11 +155,9 @@ export function useRoom(socket: Socket<ServerToClientEvents, ClientToServerEvent
         if (onGameState && response.gameState != null) {
           onGameState(response.gameState, response.turnPlayerId);
         }
-      } else {
-        router.push('/');
       }
     });
-  }, [socket, router, recomputeMyId]);
+  }, [socket, recomputeMyId]);
 
   const leaveRoom = useCallback(() => {
     socket?.emit('room:leave');

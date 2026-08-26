@@ -12,6 +12,7 @@ import ChatBox from '@/components/room/ChatBox';
 import EmojiReactions from '@/components/room/EmojiReactions';
 import ConnectionStatus from '@/components/room/ConnectionStatus';
 import GameErrorBanner from '@/components/room/GameErrorBanner';
+import JoinRoom from '@/components/lobby/JoinRoom';
 import SnakesLaddersContainer from '@/components/games/snakes-ladders/SnakesLaddersContainer';
 import HangmanContainer from '@/components/games/hangman/HangmanContainer';
 import SeaBattleContainer from '@/components/games/sea-battle/SeaBattleContainer';
@@ -22,10 +23,15 @@ export default function RoomPage() {
   const params = useParams();
   const pin = params.pin as string;
   const { socket, connected, reconnecting } = useSocket();
-  const { room, players, myId, error, clearError, leaveRoom, toggleReady, selectGame, startGame, syncRoom } = useRoom(socket);
+  const { room, players, myId, error, clearError, leaveRoom, toggleReady, selectGame, startGame, syncRoom, joinRoom, submitting } = useRoom(socket);
   const [gameState, setGameState] = useState<unknown>(null);
   const [gameActive, setGameActive] = useState(false);
   const [gameWinner, setGameWinner] = useState<{ id: string; name: string } | null>(null);
+  // F9 fix: when the user pastes /room/[pin] but isn't a member yet (new socket,
+  // new tab), room:sync fails silently and we should show a join form pre-filled
+  // with the PIN, NOT redirect back to landing. Track a brief grace window
+  // before deciding we need to show the form.
+  const [showJoinForm, setShowJoinForm] = useState(false);
   // FE-F2: track the previous connected flag so a false→true transition
   // (reconnect) triggers exactly one re-sync.
   const prevConnected = useRef(connected);
@@ -50,6 +56,22 @@ export default function RoomPage() {
       });
     }
   }, [socket, connected, pin, room, syncRoom]);
+
+  // F9 fix: if 1.5s after a successful socket connect we still have no room,
+  // we're not a member of this PIN. Show the join form pre-filled with the PIN
+  // so the user can join from the URL they pasted (instead of the old behaviour
+  // of redirecting to '/' which caused them to click "Buat Ruang Baru" again
+  // and create a fresh, separate room).
+  useEffect(() => {
+    if (!connected) {
+      setShowJoinForm(false);
+      return;
+    }
+    const t = window.setTimeout(() => {
+      if (!room && !myId) setShowJoinForm(true);
+    }, 1500);
+    return () => window.clearTimeout(t);
+  }, [connected, room, myId]);
 
   // FE-F2: on reconnect the server sees us as a brand-new connection with a new
   // socket.id. Re-sync immediately so membership + game state are restored.
@@ -112,6 +134,22 @@ export default function RoomPage() {
   const myNickname = me?.nickname ?? '';
 
   if (!connected || !room || !myId) {
+    // F9: paste-URL flow — show the join form instead of redirecting away.
+    if (showJoinForm) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center p-4">
+          <ConnectionStatus reconnecting={reconnecting} />
+          <Card title={`🔗 Masuk Ruang ${pin}`}>
+            <JoinRoom
+              initialPin={pin}
+              onJoin={(p, nickname, color, emoji) => joinRoom(p, nickname, color, emoji)}
+              error={error}
+              submitting={submitting}
+            />
+          </Card>
+        </div>
+      );
+    }
     return (
       <div className="min-h-screen">
         <ConnectionStatus reconnecting={reconnecting} />

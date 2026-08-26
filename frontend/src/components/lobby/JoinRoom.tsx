@@ -10,13 +10,15 @@ interface JoinRoomProps {
   error?: string | null;
   /** Disables submit while a join ack is in flight. */
   submitting?: boolean;
+  /** Pre-fill the PIN field (used when arriving from /room/[pin] without membership). */
+  initialPin?: string;
 }
 
 const COLORS = ['#FF9BB5', '#A8D8EA', '#B5EAD7', '#FFD3B6', '#C3AED6', '#FFB347'];
 const EMOJIS = ['🦊', '🐰', '🐼', '🐱', '🦁', '🐸', '🐵', '🐶'];
 
-export default function JoinRoom({ onJoin, error, submitting = false }: JoinRoomProps) {
-  const [pin, setPin] = useState('');
+export default function JoinRoom({ onJoin, error, submitting = false, initialPin }: JoinRoomProps) {
+  const [pin, setPin] = useState(initialPin ?? '');
   const [nickname, setNickname] = useState('');
   const [color, setColor] = useState<string>(COLORS[0] ?? '#FF9BB5');
   const [emoji, setEmoji] = useState<string>(EMOJIS[0] ?? '🦊');
