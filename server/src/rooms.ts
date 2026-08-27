@@ -152,6 +152,19 @@ export function setRoomState(roomId: string, state: Room['state']): void {
   if (room) room.state = state;
 }
 
+// After a finished game, allow the host to start a new one in the same room.
+// Clears ready flags (every player confirms again) and removes any finished
+// GameInstance so the next `game:start` builds a fresh one. The GAMES Map
+// entry must be deleted — otherwise `findGameForSocket` (gameService.ts) still
+// points at the old `state.winner` and `game:action` returns early (line 207).
+export function resetRoomForNewGame(roomId: string): Room | null {
+  const room = ROOMS.get(roomId);
+  if (!room) return null;
+  for (const p of room.players) p.isReady = false;
+  room.state = 'waiting';
+  return room;
+}
+
 export function getRoom(roomId: string): Room | undefined {
   return ROOMS.get(roomId);
 }

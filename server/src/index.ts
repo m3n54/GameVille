@@ -14,6 +14,7 @@ import {
   findByPlayer,
   validateIdentity,
   validatePlayer,
+  resetRoomForNewGame,
 } from './rooms';
 import { createInstance } from './games/base';
 import {
@@ -174,8 +175,21 @@ io.on('connection', (socket) => {
     // H3: guard the room state — a double-clicked Mulai used to pass
     // canStartGame twice and silently recreate/reset the live game.
     if (roomData.state !== 'waiting') {
-      socket.emit('room:error', { message: 'Game sudah dimulai!' });
-      return;
+      // Allow restart from 'finished' — clear ready flags + drop the old
+      // GameInstance so the new start builds fresh state. The host can then
+      // click Mulai again to begin the next match in the same room.
+      if (roomData.state === 'finished') {
+        const reset = resetRoomForNewGame(roomData.id);
+        GAMES.delete(roomData.id);
+        if (reset) {
+          io.to(roomData.id).emit('player:update', reset.players);
+          io.to(roomData.id).emit('room:state', reset);
+        }
+        // Fall through to start the new game below
+      } else {
+        socket.emit('room:error', { message: 'Game sudah dimulai!' });
+        return;
+      }
     }
     if (!canStartGame(roomData.id)) return;
     if (!roomData.gameType) return;
