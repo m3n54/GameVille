@@ -15,6 +15,7 @@ import {
   validateIdentity,
   validatePlayer,
   resetRoomForNewGame,
+  reattachPlayer,
 } from './rooms';
 import { createInstance } from './games/base';
 import {
@@ -25,6 +26,7 @@ import {
   allowEvent,
   startRoomSweeper,
   findGameForSocket,
+  clearRateLimitsForSocket,
 } from './gameService';
 
 // === CORS (deploy F4) =======================================================
@@ -91,6 +93,12 @@ io.on('connection', (socket) => {
 
     const room = createRoom(data, socket.id);
     socket.join(room.id);
+    // SV-H4: remember the nickname on the socket so a later room:sync (after
+    // socket.id change due to reconnect) can re-attach to the same player
+    // record by name. The value is a client-declared string and only used
+    // for matching an existing player in the room — never trusted on its own.
+    (socket.data as { nickname?: string }).nickname = data.nickname;
+    (socket.data as { exited?: boolean }).exited = false;
     ack({ ok: true, room });
     console.log(`[Room] Created: ${room.pin} by ${data.nickname}`);
   });
@@ -120,6 +128,10 @@ io.on('connection', (socket) => {
       return;
     }
     socket.join(room.id);
+    // SV-H4: see comment in room:create. nicknames are used only to match an
+    // existing player on reconnect — they are never trusted to grant access.
+    (socket.data as { nickname?: string }).nickname = data.nickname;
+    (socket.data as { exited?: boolean }).exited = false;
     ack({ ok: true, room });
     // Single source of truth for membership: everyone gets the fresh list.
     io.to(room.id).emit('player:update', room.players);
@@ -128,10 +140,15 @@ io.on('connection', (socket) => {
 
   // Same shared exit path as disconnect — leaving via the button mid-game used
   // to strand a ghost in the engine's turn rotation (H2).
-  socket.on('room:leave', () => {
+  // SV-H5: ack the client so the UI can stop its loading state immediately
+  // instead of waiting for the next room:sync or the next mount to recover.
+  // C1: the disconnect handler will fire too; handlePlayerExit's exited flag
+  // is what makes that second call safe. socket.leave is idempotent.
+  socket.on('room:leave', (callback?: (ack: { ok: boolean }) => void) => {
     const room = findByPlayer(socket.id);
     handlePlayerExit(io, socket);
     if (room) socket.leave(room.id);
+    if (callback) callback({ ok: true });
   });
 
   // Client asks for room state after navigation or reconnect (same membership).
@@ -139,8 +156,26 @@ io.on('connection', (socket) => {
   // (waiting/playing/finished), so we look up by member and verify the PIN
   // matches rather than searching by PIN (findByPin only returns 'waiting'
   // rooms, which would break mid-game recovery).
+  // SV-H4: if findByPlayer misses (the socket id changed on reconnect), fall
+  // back to reattaching by nickname on a waiting room. Mid-game reconnect is
+  // intentionally NOT supported — engine state references playerOrder which
+  // would need rebuilding, and the safer UX is to keep the player in the
+  // lobby until the current match ends.
   socket.on('room:sync', (data, callback) => {
-    const memberRoom = findByPlayer(socket.id);
+    let memberRoom = findByPlayer(socket.id);
+    if ((!memberRoom || memberRoom.pin !== data.pin) && data?.pin) {
+      const nickname = (socket.data as { nickname?: string }).nickname;
+      if (nickname) {
+        const reattach = reattachPlayer(socket.id, nickname, data.pin);
+        if (reattach) {
+          memberRoom = reattach.room;
+          // Reset exit flag — a reconnected socket is a brand-new session.
+          (socket.data as { exited?: boolean }).exited = false;
+          socket.join(memberRoom.id);
+          io.to(memberRoom.id).emit('player:update', memberRoom.players);
+        }
+      }
+    }
     if (!memberRoom || memberRoom.pin !== data.pin) {
       callback({ ok: false, error: 'Kamu bukan anggota ruang ini' });
       return;
@@ -169,8 +204,14 @@ io.on('connection', (socket) => {
 
   socket.on('game:start', () => {
     const roomData = findByPlayer(socket.id);
-    if (!roomData) return;
-    if (roomData.hostId !== socket.id) return;
+    if (!roomData) {
+      socket.emit('room:error', { message: 'Kamu belum bergabung di ruang manapun' });
+      return;
+    }
+    if (roomData.hostId !== socket.id) {
+      socket.emit('room:error', { message: 'Hanya host yang bisa memulai game' });
+      return;
+    }
 
     // H3: guard the room state — a double-clicked Mulai used to pass
     // canStartGame twice and silently recreate/reset the live game.
@@ -191,10 +232,22 @@ io.on('connection', (socket) => {
         return;
       }
     }
-    if (!canStartGame(roomData.id)) return;
-    if (!roomData.gameType) return;
+    // SV-H1: previously these all returned silently, leaving the host staring
+    // at a dead Mulai button. Each path now sends a specific error so the
+    // GameErrorBanner can show what was wrong.
+    if (!canStartGame(roomData.id)) {
+      socket.emit('room:error', { message: 'Belum bisa mulai: minimal 2 pemain dan semua siap' });
+      return;
+    }
+    if (!roomData.gameType) {
+      socket.emit('room:error', { message: 'Pilih permainan dulu' });
+      return;
+    }
     const engine = engines[roomData.gameType];
-    if (!engine) return;
+    if (!engine) {
+      socket.emit('room:error', { message: 'Mesin permainan tidak tersedia' });
+      return;
+    }
 
     const playerOrder = roomData.players.map((p) => p.id);
     const instance = createInstance(engine, roomData.id, playerOrder);
@@ -291,6 +344,11 @@ io.on('connection', (socket) => {
     const room = setGameType(socket.id, data.gameType);
     if (room) {
       io.to(room.id).emit('room:state', room);
+    } else {
+      // SV-H6: setGameType refused (not host, not in waiting state, or game
+      // type invalid). Tell the client — the lobby selector is otherwise
+      // silently inert on hosts trying to switch mid-game.
+      socket.emit('room:error', { message: 'Tidak bisa ganti permainan sekarang' });
     }
   });
 
@@ -322,6 +380,10 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     handlePlayerExit(io, socket);
+    // SV-H3: free per-socket rate-limiter entries eagerly rather than waiting
+    // for the 60s sweep. A 10k-socket burst would otherwise hold 10k Map
+    // entries until the next sweep tick.
+    clearRateLimitsForSocket(socket.id);
     console.log(`[-] Player disconnected: ${socket.id}`);
   });
 });

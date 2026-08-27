@@ -72,20 +72,27 @@ export function useRoom(socket: Socket<ServerToClientEvents, ClientToServerEvent
   }, [socket]);
 
   // Keep server room state in sync (player list, ready, game selection)
+  // FE-H4: F8 fix — always off() by named handler reference. The old code
+  // called `socket.off('player:update')` with no handler, which removes EVERY
+  // listener for that event on the app-lifetime socket singleton — including
+  // any that the active game container (SnakesLadders, Hangman, etc.) had
+  // registered. Hoist to a named const so cleanup targets only this hook's
+  // listener.
   useEffect(() => {
     if (!socket) return;
-    const handler = (updated: Room) => {
+    const onRoomState = (updated: Room) => {
       setRoomStoreState({ room: updated });
       recomputeMyId(updated.players);
     };
-    socket.on('room:state', handler);
-    socket.on('player:update', (updatedPlayers: Player[]) => {
+    const onPlayerUpdate = (updatedPlayers: Player[]) => {
       setRoomStoreState((s) => (s.room ? { ...s, room: { ...s.room, players: updatedPlayers } } : s));
       recomputeMyId(updatedPlayers);
-    });
+    };
+    socket.on('room:state', onRoomState);
+    socket.on('player:update', onPlayerUpdate);
     return () => {
-      socket.off('room:state', handler);
-      socket.off('player:update');
+      socket.off('room:state', onRoomState);
+      socket.off('player:update', onPlayerUpdate);
     };
   }, [socket, recomputeMyId]);
 

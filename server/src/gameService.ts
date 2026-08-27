@@ -67,6 +67,15 @@ export function computeNextTurnId(instance: GameInstance): string | null {
 //   - mid-game      → engine.removePlayer (forfeit / solo-continuation per engine),
 //                     then either game:over or refreshed state + turn event
 export function handlePlayerExit(io: IO, socket: Socket): void {
+  // C1: socket.io fires both 'room:leave' and 'disconnect' for the same
+  // logical exit. Without this guard, the second call hits an empty room
+  // (findByPlayer returns undefined on the splice that already ran) and
+  // would either no-op or, worse, attempt engine.removePlayer on a game
+  // whose GAMES entry was just deleted by the first call. Mark the socket
+  // on first invocation; subsequent calls short-circuit.
+  if ((socket.data as { exited?: boolean }).exited) return;
+  (socket.data as { exited?: boolean }).exited = true;
+
   const result = leaveRoom(socket.id);
 
   if (!result.roomId) return;
@@ -92,6 +101,13 @@ export function handlePlayerExit(io: IO, socket: Socket): void {
 
   if (room.state === 'finished') {
     GAMES.delete(result.roomId);
+    // Reset to 'waiting' so a player who left the winner modal can rejoin the
+    // same PIN via the F9 rejoin form (rooms.ts:leaveRoom preserves finished
+    // rooms when empty). Broadcast the state change so any remaining members
+    // also see the room re-open rather than staying stuck on the "Game
+    // selesai" overlay with no path forward.
+    setRoomState(result.roomId, 'waiting');
+    io.to(result.roomId).emit('room:state', room);
     return;
   }
 
@@ -125,6 +141,14 @@ export function handlePlayerExit(io: IO, socket: Socket): void {
 // Tiny sliding-window limiter keyed by socket id + event name. In-memory by
 // design — the server is single-instance on Render free tier.
 const rateBuckets = new Map<string, number[]>();
+
+// SV-H3: explicit per-socket cleanup hook so disconnecting clients free their
+// rate-limiter entries immediately rather than waiting for the 60s sweep.
+export function clearRateLimitsForSocket(socketId: string): void {
+  for (const key of Array.from(rateBuckets.keys())) {
+    if (key.endsWith(`:${socketId}`)) rateBuckets.delete(key);
+  }
+}
 
 export function allowEvent(key: string, max: number, windowMs: number): boolean {
   const now = Date.now();

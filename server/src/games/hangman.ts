@@ -154,6 +154,10 @@ export class HangmanEngine extends BaseGame {
 
   // Disconnection handling: prune the leaver; with 1 player left the co-op game
   // continues solo (turn rotation stops, but guessing stays open).
+  // EN-H1: when the leaver is BEFORE the active turn, every subsequent index
+  // shifts down by one and we must decrement currentTurn to stay on the same
+  // player. The old code only handled the "leaver is at or past the current
+  // turn" case, which let the wrong player hijack the turn.
   override removePlayer(
     state: HangmanExtendedState,
     playerId: string,
@@ -163,7 +167,16 @@ export class HangmanEngine extends BaseGame {
     if (idx === -1) return { playerOrder: state.playerOrder };
     const next = [...state.playerOrder];
     next.splice(idx, 1);
-    if (state.currentTurn >= next.length && next.length > 0) {
+    if (next.length === 0) {
+      // No players left; engine will be deleted by the caller.
+      state.playerOrder = next;
+      return { playerOrder: next, gameOver: true };
+    }
+    if (state.currentTurn > idx) {
+      // Leaver was earlier in the order; everything after shifted down by 1.
+      state.currentTurn -= 1;
+    } else if (state.currentTurn >= next.length) {
+      // Leaver was the active player (or later and we wrapped); wrap to 0.
       state.currentTurn = 0;
     }
     state.playerOrder = next;

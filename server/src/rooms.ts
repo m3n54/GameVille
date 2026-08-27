@@ -3,6 +3,13 @@ import { Room, Player, GameType } from './types';
 
 const ROOMS = new Map<string, Room>();
 
+// C2: socket→room O(1) index. Replaces the O(N×M) `Array.from(ROOMS.values())
+// .find(r => r.players.some(p => p.id === socketId))` scan that ran on every
+// event handler (room:leave, room:sync, disconnect, game:start, game:action,
+// chat:message, reaction:send). Write in createRoom / joinRoom / leaveRoom;
+// clear in leaveRoom. findByPlayer now consults the index first.
+const SOCKET_TO_ROOM = new Map<string, string>();
+
 // M5: identity fields arrive from untrusted clients. Validate once at the door
 // so oversized/hostile strings never enter ROOMS memory or get broadcast.
 // `name` is host-only (room display name); joiners don't have it — see
@@ -67,6 +74,7 @@ export function createRoom(data: { name: string; nickname: string; color: string
   };
 
   ROOMS.set(room.id, room);
+  SOCKET_TO_ROOM.set(socketId, room.id);
   return room;
 }
 
@@ -75,6 +83,14 @@ export function joinRoom(pin: string, data: { nickname: string; color: string; e
   if (!room) return null;
   if (room.state !== 'waiting') return null;
   if (room.players.length >= 4) return null;
+  // C3: same socket trying to join twice (e.g. user has the room open in
+  // two tabs) would otherwise push a second player record under the same id.
+  // When one tab disconnects, handlePlayerExit would remove the player that
+  // BOTH tabs were rendering, and the surviving tab loses its membership.
+  if (room.players.some(p => p.id === socketId)) return room;
+  // Defensive: if the index already maps this socket to this room, the
+  // membership is in sync; return current state without pushing.
+  if (SOCKET_TO_ROOM.get(socketId) === room.id) return room;
 
   const player: Player = {
     id: socketId,
@@ -87,6 +103,7 @@ export function joinRoom(pin: string, data: { nickname: string; color: string; e
   };
 
   room.players.push(player);
+  SOCKET_TO_ROOM.set(socketId, room.id);
   return room;
 }
 
@@ -98,6 +115,7 @@ export function leaveRoom(socketId: string): { roomId?: string; newHost?: Player
   if (index === -1) return {};
 
   room.players.splice(index, 1);
+  SOCKET_TO_ROOM.delete(socketId);
 
   // Assign new host if host left
   if (room.hostId === socketId && room.players.length > 0) {
@@ -107,15 +125,25 @@ export function leaveRoom(socketId: string): { roomId?: string; newHost?: Player
     return { roomId: room.id, newHost: nextHost };
   }
 
-  // Clean up empty rooms. H1 fix: still report the roomId so the caller can
-  // delete the matching GAMES entry — the old `return {}` made the disconnect
-  // handler skip game cleanup entirely, leaking one GameInstance per abandoned
-  // game forever.
+  // Clean up empty rooms — EXCEPT 'finished' rooms, which the F9 rejoin flow
+  // depends on staying alive. The host who finishes a game can still be in
+  // the lobby (winner modal) and may want to play again from the same PIN;
+  // auto-deleting a finished room the moment it empties stranded them on a
+  // "Kode ruang tidak valid" error after leave → rejoin. Reset to 'waiting'
+  // so the next room:join via findByPin (which only matches 'waiting' rooms)
+  // admits the same player back into the same room.
   if (room.players.length === 0) {
+    if (room.state === 'finished') {
+      room.state = 'waiting';
+      return { roomId: room.id };
+    }
     ROOMS.delete(room.id);
     return { roomId: room.id };
   }
 
+  // H1 fix: still report the roomId so the caller can delete the matching
+  // GAMES entry — the old `return {}` made the disconnect handler skip game
+  // cleanup entirely, leaking one GameInstance per abandoned game forever.
   return { roomId: room.id };
 }
 
@@ -133,6 +161,12 @@ export function setGameType(socketId: string, gameType: GameType): Room | null {
   const room = findByPlayer(socketId);
   if (!room) return null;
   if (room.hostId !== socketId) return null;
+  // SV-H6: refuse to switch games mid-match. Without this, the host could
+  // flip room.gameType while GAMES still holds the old engine, and the next
+  // game:action would resolve engines[room.gameType] to the new engine but
+  // findGameForSocket would return the old instance — the new engine would
+  // mutate the wrong state, then stateForClient would crash on a type mismatch.
+  if (room.state !== 'waiting') return null;
 
   room.gameType = gameType;
   return room;
@@ -174,7 +208,47 @@ export function findByPin(pin: string): Room | undefined {
 }
 
 export function findByPlayer(socketId: string): Room | undefined {
-  return Array.from(ROOMS.values()).find(r => r.players.some(p => p.id === socketId));
+  // C2: O(1) lookup via SOCKET_TO_ROOM. The old linear scan was O(N×M) and
+  // ran on every event handler — the bottleneck for any non-trivial room count.
+  const roomId = SOCKET_TO_ROOM.get(socketId);
+  if (!roomId) return undefined;
+  const room = ROOMS.get(roomId);
+  if (!room) {
+    // Index drift: the room vanished but the entry remained. Defensive cleanup.
+    SOCKET_TO_ROOM.delete(socketId);
+    return undefined;
+  }
+  // Final sanity: the player must still be in the room. This protects against
+  // any path that mutates room.players without going through leaveRoom.
+  if (!room.players.some(p => p.id === socketId)) {
+    SOCKET_TO_ROOM.delete(socketId);
+    return undefined;
+  }
+  return room;
+}
+
+// SV-H4: re-attach a freshly-reconnected socket to its existing player
+// record by nickname. Socket.io assigns a new id on every transport reset, so
+// findByPlayer(newId) misses; without this path, a brief network blip locked
+// the player out of their own room until reset.
+//
+// Only valid in 'waiting' rooms — mid-game re-attach would race with the
+// active engine (engine state references old player id in playerOrder etc).
+// Returns the updated room or null if no matching player was found.
+export function reattachPlayer(newSocketId: string, nickname: string, pin: string): { room: Room; player: Player } | null {
+  const room = findByPin(pin);
+  if (!room) return null;
+  if (room.state !== 'waiting') return null;
+  const existing = room.players.find(p => p.nickname === nickname);
+  if (!existing) return null;
+  // If the old id is still in the index (e.g. a stale entry from a prior
+  // socket that never had its leave handler run), clear it.
+  if (existing.id !== newSocketId) {
+    SOCKET_TO_ROOM.delete(existing.id);
+    existing.id = newSocketId;
+  }
+  SOCKET_TO_ROOM.set(newSocketId, room.id);
+  return { room, player: existing };
 }
 
 export function listRooms(): Room[] {
