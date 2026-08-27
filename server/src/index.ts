@@ -13,6 +13,7 @@ import {
   getRoom,
   findByPlayer,
   validateIdentity,
+  validatePlayer,
 } from './rooms';
 import { createInstance } from './games/base';
 import {
@@ -106,7 +107,7 @@ io.on('connection', (socket) => {
       ack({ ok: false, error: 'Kode ruang tidak valid' });
       return;
     }
-    const invalid = validateIdentity(data);
+    const invalid = validatePlayer(data);
     if (invalid) {
       ack({ ok: false, error: invalid });
       return;

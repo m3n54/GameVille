@@ -5,12 +5,24 @@ const ROOMS = new Map<string, Room>();
 
 // M5: identity fields arrive from untrusted clients. Validate once at the door
 // so oversized/hostile strings never enter ROOMS memory or get broadcast.
+// `name` is host-only (room display name); joiners don't have it — see
+// validatePlayer below for the joiner-side check.
 export function validateIdentity(data: {
   name?: unknown; nickname?: unknown; color?: unknown; emoji?: unknown;
 }): string | null {
   if (typeof data.name !== 'string' || data.name.trim().length === 0 || data.name.length > 40) {
     return 'Nama ruang harus 1-40 karakter';
   }
+  return validatePlayer(data);
+}
+
+// Joiner payload — only nickname/color/emoji. No `name`: the room's name is
+// already chosen by the host at create time and isn't something a joiner
+// contributes. Keeping the two checks separate fixes the JoinRoom -> "Nama
+// ruang harus 1-40 karakter" bug, where the joiner had no name field to send.
+export function validatePlayer(data: {
+  nickname?: unknown; color?: unknown; emoji?: unknown;
+}): string | null {
   if (typeof data.nickname !== 'string' || data.nickname.trim().length === 0 || data.nickname.length > 24) {
     return 'Nickname harus 1-24 karakter';
   }
