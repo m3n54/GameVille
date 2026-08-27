@@ -161,7 +161,18 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
 
   // Strict turn check (FE-F3): unknown ≠ my turn. The old optimistic default
   // let everyone act (and type) before the first turn event arrived.
-  const isMyTurn = currentPlayerId != null && currentPlayerId === myId;
+  //
+  // Hangman-specific fallback: the server's `gameStart` event doesn't carry
+  // `firstTurnId` (see server/src/games/hangman.ts:81 — gameStart data is `{}`),
+  // so the first `turn` event may not arrive until after player 0 has already
+  // acted. As a backstop we read `currentTurn` (an index into playerOrder) from
+  // gameState, which the server keeps in sync and broadcasts on every state
+  // change. If either signal says it's our turn, the buttons are enabled.
+  const turnFromState =
+    Array.isArray(gameState.playerOrder) &&
+    gameState.playerOrder[gameState.currentTurn] === myId;
+  const isMyTurn =
+    (currentPlayerId != null && currentPlayerId === myId) || turnFromState;
   const isOver = gameState.winner != null;
   const guessedLetters = gameState.guessedLetters || [];
   const correctLetters = gameState.correctLetters || [];
