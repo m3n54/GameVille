@@ -1,9 +1,14 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useCallback, useRef, useSyncExternalStore, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Socket } from 'socket.io-client';
 import type { Room, Player, GameType, ServerToClientEvents, ClientToServerEvents, RoomAck, SyncAck } from '@/types';
+import {
+  getRoomStoreState,
+  setRoomStoreState,
+  subscribeRoomStore,
+} from '@/lib/roomStore';
 
 // Identity persistence intentionally absent — CLAUDE.md: client-side sessionStorage
 // room/identity persistence produced frozen phantom rooms and was removed.
@@ -22,8 +27,6 @@ function loadIdentity(): { nickname: string; color: string; emoji: string } | nu
   }
 }
 
-// SyncResponse is an alias retained for backwards-compat — SyncAck is the
-// canonical shape. Use SyncAck directly in new code.
 export type SyncResponse = SyncAck;
 
 interface UseRoomReturn {
@@ -46,19 +49,16 @@ interface UseRoomReturn {
 
 export function useRoom(socket: Socket<ServerToClientEvents, ClientToServerEvents> | null): UseRoomReturn {
   const router = useRouter();
-  const [room, setRoom] = useState<Room | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  // Anti-double-click: true between emit and ack. The old UI let a second click
-  // fire room:create/join again while the first was in flight.
-  const [submitting, setSubmitting] = useState(false);
-  // Memoize so toggleReady's useCallback deps are stable; otherwise the
-  // expression `room?.players ?? []` returns a new array each render and the
-  // exhaustive-deps lint flags it.
-  const players = useMemo(() => room?.players ?? [], [room?.players]);
-  // FE-F2: socket.id changes on every reconnect; the player's real id does not.
-  // Track it by matching our saved identity (nickname) against the roster.
-  const myPlayerIdRef = useRef<string | null>(null);
-  const [myId, setMyId] = useState<string | null>(null);
+
+  // Subscribe to the module-scoped roomStore so the same `room` survives
+  // landing → /room/[pin] route transitions. Without this, useState inside
+  // useRoom was reset on each fresh mount, dropping the createRoom ack's
+  // state and making /room/[pin] think the user wasn't a member.
+  const store = useSyncExternalStore(subscribeRoomStore, getRoomStoreState, getRoomStoreState);
+  const { room, myId, error, submitting } = store;
+  const players = room?.players ?? [];
+
+  const myPlayerIdRef = useRef<string | null>(myId);
 
   const recomputeMyId = useCallback((updatedPlayers: Player[]) => {
     if (!socket) return;
@@ -68,19 +68,19 @@ export function useRoom(socket: Socket<ServerToClientEvents, ClientToServerEvent
       : undefined;
     const resolved = me?.id ?? socket.id ?? null;
     myPlayerIdRef.current = resolved;
-    setMyId(resolved);
+    setRoomStoreState({ myId: resolved });
   }, [socket]);
 
   // Keep server room state in sync (player list, ready, game selection)
   useEffect(() => {
     if (!socket) return;
     const handler = (updated: Room) => {
-      setRoom(updated);
+      setRoomStoreState({ room: updated });
       recomputeMyId(updated.players);
     };
     socket.on('room:state', handler);
     socket.on('player:update', (updatedPlayers: Player[]) => {
-      setRoom(prev => (prev ? { ...prev, players: updatedPlayers } : prev));
+      setRoomStoreState((s) => (s.room ? { ...s, room: { ...s.room, players: updatedPlayers } } : s));
       recomputeMyId(updatedPlayers);
     });
     return () => {
@@ -95,7 +95,7 @@ export function useRoom(socket: Socket<ServerToClientEvents, ClientToServerEvent
   useEffect(() => {
     if (!socket) return;
     const onRoomError = (err: { message: string }) => {
-      setError(err.message);
+      setRoomStoreState({ error: err.message });
     };
     socket.on('room:error', onRoomError);
     return () => {
@@ -109,16 +109,15 @@ export function useRoom(socket: Socket<ServerToClientEvents, ClientToServerEvent
   const createRoom = useCallback((name: string, nickname: string, color: string, emoji: string) => {
     if (!socket) return;
     saveIdentity({ nickname, color, emoji });
-    setError(null);
-    setSubmitting(true);
+    setRoomStoreState({ error: null, submitting: true });
     socket.emit('room:create', { name, nickname, color, emoji }, (res: RoomAck) => {
-      setSubmitting(false);
+      setRoomStoreState({ submitting: false });
       if (res.ok && res.room) {
         recomputeMyId(res.room.players);
-        setRoom(res.room);
+        setRoomStoreState({ room: res.room });
         router.push(`/room/${res.room.pin}`);
       } else {
-        setError(res.error ?? 'Gagal membuat ruang');
+        setRoomStoreState({ error: res.error ?? 'Gagal membuat ruang' });
       }
     });
   }, [socket, router, recomputeMyId]);
@@ -126,16 +125,15 @@ export function useRoom(socket: Socket<ServerToClientEvents, ClientToServerEvent
   const joinRoom = useCallback((pin: string, nickname: string, color: string, emoji: string) => {
     if (!socket) return;
     saveIdentity({ nickname, color, emoji });
-    setError(null);
-    setSubmitting(true);
+    setRoomStoreState({ error: null, submitting: true });
     socket.emit('room:join', { pin, nickname, color, emoji }, (res: RoomAck) => {
-      setSubmitting(false);
+      setRoomStoreState({ submitting: false });
       if (res.ok && res.room) {
         recomputeMyId(res.room.players);
-        setRoom(res.room);
+        setRoomStoreState({ room: res.room });
         router.push(`/room/${res.room.pin}`);
       } else {
-        setError(res.error ?? 'Gagal masuk ruang');
+        setRoomStoreState({ error: res.error ?? 'Gagal masuk ruang' });
       }
     });
   }, [socket, router, recomputeMyId]);
@@ -150,7 +148,7 @@ export function useRoom(socket: Socket<ServerToClientEvents, ClientToServerEvent
     if (!socket) return;
     socket.emit('room:sync', { pin }, (response: SyncAck) => {
       if (response.ok && response.room) {
-        setRoom(response.room);
+        setRoomStoreState({ room: response.room });
         recomputeMyId(response.room.players);
         if (onGameState && response.gameState != null) {
           onGameState(response.gameState, response.turnPlayerId);
@@ -161,15 +159,15 @@ export function useRoom(socket: Socket<ServerToClientEvents, ClientToServerEvent
 
   const leaveRoom = useCallback(() => {
     socket?.emit('room:leave');
-    setRoom(null);
+    setRoomStoreState({ room: null, myId: null, players: [] });
     router.push('/');
   }, [socket, router]);
 
   const toggleReady = useCallback(() => {
     if (!room) return;
-    const me = players.find(p => p.id === myPlayerIdRef.current);
+    const me = (room.players).find(p => p.id === myPlayerIdRef.current);
     socket?.emit('player:ready', { ready: !me?.isReady });
-  }, [socket, room, players]);
+  }, [socket, room]);
 
   const selectGame = useCallback((gameType: GameType) => {
     socket?.emit('game:select', { gameType });
@@ -179,5 +177,19 @@ export function useRoom(socket: Socket<ServerToClientEvents, ClientToServerEvent
     socket?.emit('game:start');
   }, [socket]);
 
-  return { room, players, myId, error, submitting, clearError: () => setError(null), createRoom, joinRoom, syncRoom, leaveRoom, toggleReady, selectGame, startGame };
+  return {
+    room,
+    players,
+    myId,
+    error,
+    submitting,
+    clearError: () => setRoomStoreState({ error: null }),
+    createRoom,
+    joinRoom,
+    syncRoom,
+    leaveRoom,
+    toggleReady,
+    selectGame,
+    startGame,
+  };
 }
