@@ -35,14 +35,27 @@ export default function RoomPage() {
   // FE-F2: track the previous connected flag so a false→true transition
   // (reconnect) triggers exactly one re-sync.
   const prevConnected = useRef(connected);
+  // FE-H3: per-page "ever had room" flag — set INSIDE syncRoom ack callbacks
+  // (the only server-side signal that the user is a member of this PIN).
+  // Declared here so the sync effect on first mount can read/write it; the
+  // F9 grace timer below reads it to decide whether to show the join form.
+  // Per-page (useRef) so navigating to a different /room/[pin] resets it.
+  const everHadRoomRef = useRef(false);
 
   // After navigation the component is fresh — ask the server for room state.
   // Mid-game recovery: server replays the current game snapshot + whose turn
   // it is in the same ack.
+  // FE-H3 follow-up: a successful sync ack is the source of truth that this
+  // page's user is a member of the room — flip `everHadRoomRef` INSIDE the
+  // ack callback so a slow (>1.5s) network round-trip can't trigger F9 over
+  // a legitimate re-syncing member. The previous version only set the ref
+  // on the `room` truthy effect, which fires after the next render — too
+  // late if F9's setTimeout already armed with the old `false` value.
   useEffect(() => {
     if (!socket || !connected) return;
     if (!room) {
       syncRoom(pin, (state, turnPlayerId) => {
+        everHadRoomRef.current = true;
         if (state != null) {
           setGameState(state);
           setGameActive(true);
@@ -62,11 +75,21 @@ export default function RoomPage() {
   // so the user can join from the URL they pasted (instead of the old behaviour
   // of redirecting to '/' which caused them to click "Buat Ruang Baru" again
   // and create a fresh, separate room).
+  // FE-H3: gate on a per-page "ever had room" flag. A re-syncing member whose
+  // room:sync ack takes >1.5s used to see the F9 form pop up over their
+  // recovering game, and clicking Gabung would create a duplicate "menza
+  // (Kamu)". The flag is per-page (useRef) so navigating away resets it.
+  useEffect(() => {
+    if (room) everHadRoomRef.current = true;
+  }, [room]);
   useEffect(() => {
     if (!connected) {
       setShowJoinForm(false);
       return;
     }
+    // Skip the timer entirely if this user has ever been a member of THIS
+    // page's room — they're a legitimate re-syncing member, not a new visitor.
+    if (everHadRoomRef.current) return;
     const t = window.setTimeout(() => {
       if (!room && !myId) setShowJoinForm(true);
     }, 1500);
@@ -91,6 +114,9 @@ export default function RoomPage() {
     // syncRoom itself re-fetches regardless; clearing avoids stale renders
     // between reconnect and ack.
     syncRoom(pin, (state, turnPlayerId) => {
+      // Same gate as the mount effect — a reconnected member whose sync ack
+      // takes >1.5s must not see the F9 join form pop over their game.
+      everHadRoomRef.current = true;
       if (state != null) {
         setGameState(state);
         setGameActive(true);
@@ -182,7 +208,7 @@ export default function RoomPage() {
         <div className="flex-1">{renderGame()}</div>
         <div className="w-full lg:w-80 space-y-4">
           <GameErrorBanner message={error} onDismiss={clearError} />
-          <ChatBox socket={socket!} myNickname={myNickname} />
+          <ChatBox socket={socket!} myNickname={myNickname} myId={myId} />
           <EmojiReactions socket={socket!} />
           <Button variant="ghost" onClick={() => { setGameActive(false); leaveRoom(); }}>
             ← Keluar
@@ -312,7 +338,7 @@ export default function RoomPage() {
               </div>
             </Card>
 
-            <ChatBox socket={socket!} myNickname={myNickname} />
+            <ChatBox socket={socket!} myNickname={myNickname} myId={myId} />
             <EmojiReactions socket={socket!} />
           </div>
         </motion.div>
