@@ -159,9 +159,14 @@ export function useRoom(socket: Socket<ServerToClientEvents, ClientToServerEvent
 
   const leaveRoom = useCallback(() => {
     socket?.emit('room:leave');
-    setRoomStoreState({ room: null, myId: null, players: [] });
-    router.push('/');
-  }, [socket, router]);
+    // Clear the cached membership but stay on /room/[pin] — the page's F9 grace
+    // timer will detect !room && !myId and show the JoinRoom form pre-filled
+    // with the URL's PIN, so the user can re-join without re-typing it. The
+    // old `router.push('/')` silently sent them back to landing where they'd
+    // often click "Buat Ruang Baru" by mistake and create a fresh, separate
+    // room — see commit 128dbd0 for the original F9 fix.
+    setRoomStoreState({ room: null, myId: null, error: null });
+  }, [socket]);
 
   const toggleReady = useCallback(() => {
     if (!room) return;
