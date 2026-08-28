@@ -10,12 +10,16 @@ export function useDiceRoll(value: number | null, rolling: boolean) {
   const [phase, setPhase] = useState<RollPhase>('idle');
   const [target, setTarget] = useState<FaceValue>(1);
   const startRef = useRef<number>(0);
+  // I2 review fix: read latest `phase` via a ref so the effect doesn't re-run when
+  // the phase flips (which would re-create t1/t2 timers and could fire double).
+  const phaseRef = useRef<RollPhase>('idle');
+  phaseRef.current = phase;
 
   useEffect(() => {
     if (rolling) {
       setPhase('spinning');
       startRef.current = performance.now();
-    } else if (phase === 'spinning' && value != null) {
+    } else if (phaseRef.current === 'spinning' && value != null) {
       const t = (performance.now() - startRef.current) / SPIN_MS;
       const remaining = Math.max(0, 1 - t);
       setTarget(value as FaceValue);
@@ -28,7 +32,7 @@ export function useDiceRoll(value: number | null, rolling: boolean) {
       };
     }
     return undefined;
-  }, [rolling, value, phase]);
+  }, [rolling, value]);
 
   const skip = () => {
     if (phase !== 'landed' && value != null) {

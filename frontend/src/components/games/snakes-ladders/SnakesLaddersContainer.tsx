@@ -60,13 +60,15 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
         return;
       }
       if (action.type === 'diceResult') {
-        // Roll SFX fires on every dice result. Hop SFX fires when the player actually moves
-        // (a 6-on-dice with no move would still emit diceResult — we only need hop when position changes).
-        dispatchSfx('roll');
-        if (typeof action.value === 'number') {
-          setSkipAnim(false); // fresh hop sequence per dice
-          // Defer hop SFX to next tick so Board2D's usePawnAnim picks up the new target first.
-          setTimeout(() => dispatchSfx('hop'), 0);
+        // Roll + hop SFX are per-player (only fire for the rolling player). Snake/ladder
+        // glow + SFX are world events — everyone sees/hears them.
+        if (action.playerId === myId) {
+          dispatchSfx('roll');
+          if (typeof action.value === 'number') {
+            setSkipAnim(false); // fresh hop sequence per dice
+            // Defer hop SFX to next tick so Board2D's usePawnAnim picks up the new target first.
+            setTimeout(() => dispatchSfx('hop'), 0);
+          }
         }
         if (action.snakeHit) {
           const [head] = action.snakeHit;

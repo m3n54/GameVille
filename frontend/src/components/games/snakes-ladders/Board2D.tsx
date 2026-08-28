@@ -115,10 +115,7 @@ export default function Board2D({
             <div
               key={i}
               className="relative rounded-sm flex items-center justify-center text-[9px] font-bold text-cute-muted"
-              style={{
-                background: color,
-                direction: row % 2 === 1 ? 'rtl' : 'ltr',
-              }}
+              style={{ background: color }}
             >
               {i + 1}
             </div>

@@ -41,7 +41,11 @@ export default function SoundFx({ onPlay }: Props) {
       const kind = (e as CustomEvent<keyof typeof SOUNDS>).detail;
       if (!(kind in SOUNDS)) return;
       if (muted) return;
-      refs.current[kind]?.play().catch(() => {});
+      const audio = refs.current[kind];
+      if (!audio) return;
+      // I3 review fix: reset to start so rapid replays don't resume from a non-zero offset.
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
       onPlay?.(kind);
     };
     window.addEventListener('gameville:sfx', handler);

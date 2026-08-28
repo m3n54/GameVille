@@ -51,11 +51,16 @@ export function usePawnAnim(position: number, skip: boolean, onComplete?: () => 
       if (prev.phase === 'idle') return prev;
       return { from: prev.to, to: prev.to, phase: 'idle' };
     });
-    setDisplay((prev) => ({ tile: prev.tile, phase: 'idle' }));
+    setDisplay({
+      // C1 review fix: snap to the animation's TARGET tile, not whatever tile the
+      // last rAF frame happened to be on. Pawn must land at the final position.
+      tile: anim.to,
+      phase: 'idle',
+    });
     cancelRaf();
     genRef.current++;
     onCompleteRef.current?.();
-  }, [skip, cancelRaf]);
+  }, [skip, cancelRaf, anim]);
 
   // Tick effect — restarts whenever `anim` changes (real state transitions, not per-frame).
   useEffect(() => {

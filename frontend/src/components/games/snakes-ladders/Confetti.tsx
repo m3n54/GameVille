@@ -17,7 +17,9 @@ export default function Confetti({ trigger }: Props) {
       rot: Math.random() * 360,
     }));
     setPieces(ps);
-    const t = setTimeout(() => setPieces([]), 2500);
+    // I4 review fix: outer timeout must cover inner piece duration (2 + Math.random() up to 3s).
+    // 2500ms caused pieces to vanish mid-fall. 3000ms gives the slowest piece room to finish.
+    const t = setTimeout(() => setPieces([]), 3000);
     return () => clearTimeout(t);
   }, [trigger]);
 
