@@ -1,14 +1,15 @@
 'use client';
 
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { motion } from 'framer-motion';
+import { useDiceRoll, RollPhase, SPIN_MS, FaceValue } from './useDiceRoll';
 
-type FaceValue = 1 | 2 | 3 | 4 | 5 | 6;
+type FaceValueLocal = 1 | 2 | 3 | 4 | 5 | 6;
 
 // Normalized pip coordinates in [-0.32..0.32], laid out on each face plane.
-const PIP_LAYOUTS: Record<FaceValue, [number, number][]> = {
+const PIP_LAYOUTS: Record<FaceValueLocal, [number, number][]> = {
   1: [[0, 0]],
   2: [
     [-0.32, -0.32],
@@ -46,7 +47,7 @@ const PIP_LAYOUTS: Record<FaceValue, [number, number][]> = {
 // rotated so the plane's +Z normal points outward. Opposite faces sum to 7:
 // +Y=1 / -Y=6, +X=2 / -X=5, +Z=3 / -Z=4.
 const FACES: {
-  value: FaceValue;
+  value: FaceValueLocal;
   position: [number, number, number];
   rotation: [number, number, number];
 }[] = [
@@ -59,7 +60,7 @@ const FACES: {
 ];
 
 // Rotation [rx, ry] that turns each face's normal toward the camera (+Z).
-const TARGET_ROTATIONS: Record<FaceValue, [number, number]> = {
+const TARGET_ROTATIONS: Record<FaceValueLocal, [number, number]> = {
   1: [Math.PI / 2, 0],
   6: [-Math.PI / 2, 0],
   2: [0, -Math.PI / 2],
@@ -76,25 +77,63 @@ function nearestTurn(current: number, target: number): number {
   return target + Math.round((current - target) / TWO_PI) * TWO_PI;
 }
 
-function DiceModel({ value, rolling }: { value: number; rolling: boolean }) {
+function DiceModel({
+  value,
+  phase,
+  skip,
+}: {
+  value: number;
+  phase: RollPhase;
+  skip: boolean;
+}) {
   const groupRef = useRef<THREE.Group>(null);
+  const startRef = useRef<number>(0);
+  const [rx, setRx] = useState(0);
+  const [ry, setRy] = useState(0);
 
+  useEffect(() => {
+    if (phase === 'spinning') {
+      startRef.current = performance.now();
+      const spin = () => {
+        const t = (performance.now() - startRef.current) / SPIN_MS;
+        if (t < 1) {
+          setRx((r) => r + 0.18);
+          setRy((r) => r + 0.24);
+          requestAnimationFrame(spin);
+        }
+      };
+      requestAnimationFrame(spin);
+    } else if (phase === 'settling' || phase === 'landed') {
+      const v: FaceValue =
+        value in TARGET_ROTATIONS ? (value as FaceValue) : 3;
+      const [tx, ty] = TARGET_ROTATIONS[v];
+      setRx(nearestTurn(rx, tx));
+      setRy(nearestTurn(ry, ty));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, value]);
+
+  // Skip: jump directly to target
+  useEffect(() => {
+    if (skip && (value as FaceValue) in TARGET_ROTATIONS) {
+      const [tx, ty] = TARGET_ROTATIONS[value as FaceValue];
+      setRx(tx);
+      setRy(ty);
+    }
+  }, [skip, value]);
+
+  // Lightweight useFrame for ambient wobble while spinning (preserves prior feel).
   useFrame((_, delta) => {
     const group = groupRef.current;
     if (!group) return;
-    if (rolling) {
+    if (phase === 'spinning') {
       group.rotation.x += delta * 6;
       group.rotation.y += delta * 8;
-    } else {
-      const [tx, ty] = TARGET_ROTATIONS[(value as FaceValue) in TARGET_ROTATIONS ? (value as FaceValue) : 3];
-      const factor = 1 - Math.exp(-DAMP_LAMBDA * delta);
-      group.rotation.x += (nearestTurn(group.rotation.x, tx) - group.rotation.x) * factor;
-      group.rotation.y += (nearestTurn(group.rotation.y, ty) - group.rotation.y) * factor;
     }
   });
 
   return (
-    <group ref={groupRef}>
+    <group ref={groupRef} rotation={[rx, ry, 0]}>
       {/* Cube body */}
       <mesh>
         <boxGeometry args={[1.4, 1.4, 1.4]} />
@@ -131,7 +170,15 @@ interface Dice3DProps {
   disabled: boolean;
 }
 
-export default function Dice3D({ value, rolling, onRoll, disabled }: Dice3DProps): JSX.Element {
+export default function Dice3D({
+  value,
+  rolling,
+  onRoll,
+  disabled,
+}: Dice3DProps): JSX.Element {
+  const { phase, target, skip } = useDiceRoll(value, rolling);
+  const [skipAnim, setSkipAnim] = useState(false);
+
   return (
     <div className="flex flex-col items-center gap-3">
       <div className="w-36 h-36">
@@ -140,7 +187,7 @@ export default function Dice3D({ value, rolling, onRoll, disabled }: Dice3DProps
           <pointLight position={[4, 6, 5]} intensity={0.9} />
           <pointLight position={[-4, -3, 3]} intensity={0.35} />
           <group position={[0, 0.15, 0]}>
-            <DiceModel value={value || 1} rolling={rolling} />
+            <DiceModel value={value || target} phase={phase} skip={skipAnim} />
           </group>
           {/* Soft ground shadow */}
           <mesh position={[0, -1.15, 0]} rotation={[-Math.PI / 2, 0, 0]}>
@@ -153,12 +200,23 @@ export default function Dice3D({ value, rolling, onRoll, disabled }: Dice3DProps
         whileHover={!disabled ? { scale: 1.1 } : {}}
         whileTap={!disabled ? { scale: 0.9 } : {}}
         transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-        onClick={onRoll}
+        onClick={() => {
+          if (phase === 'spinning' || phase === 'settling') {
+            skip();
+            setSkipAnim(true);
+          } else if (!disabled) {
+            onRoll();
+          }
+        }}
         disabled={disabled}
         className={`px-6 py-3 bg-primary text-white font-bold rounded-button shadow-soft
           transition-all ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-pink-400'}`}
       >
-        {rolling ? '🎲 Melempar...' : '🎲 Lempar Dadu!'}
+        {phase === 'spinning'
+          ? '⏩ Lewati (tap)'
+          : phase === 'settling'
+            ? '⏩ Mendarat...'
+            : '🎲 Lempar Dadu!'}
       </motion.button>
     </div>
   );
