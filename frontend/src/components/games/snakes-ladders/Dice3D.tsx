@@ -1,15 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas } from '@react-three/fiber';
 import * as THREE from 'three';
 import { motion } from 'framer-motion';
 import { useDiceRoll, RollPhase, SPIN_MS, FaceValue } from './useDiceRoll';
 
-type FaceValueLocal = 1 | 2 | 3 | 4 | 5 | 6;
-
 // Normalized pip coordinates in [-0.32..0.32], laid out on each face plane.
-const PIP_LAYOUTS: Record<FaceValueLocal, [number, number][]> = {
+const PIP_LAYOUTS: Record<FaceValue, [number, number][]> = {
   1: [[0, 0]],
   2: [
     [-0.32, -0.32],
@@ -47,7 +45,7 @@ const PIP_LAYOUTS: Record<FaceValueLocal, [number, number][]> = {
 // rotated so the plane's +Z normal points outward. Opposite faces sum to 7:
 // +Y=1 / -Y=6, +X=2 / -X=5, +Z=3 / -Z=4.
 const FACES: {
-  value: FaceValueLocal;
+  value: FaceValue;
   position: [number, number, number];
   rotation: [number, number, number];
 }[] = [
@@ -60,7 +58,7 @@ const FACES: {
 ];
 
 // Rotation [rx, ry] that turns each face's normal toward the camera (+Z).
-const TARGET_ROTATIONS: Record<FaceValueLocal, [number, number]> = {
+const TARGET_ROTATIONS: Record<FaceValue, [number, number]> = {
   1: [Math.PI / 2, 0],
   6: [-Math.PI / 2, 0],
   2: [0, -Math.PI / 2],
@@ -90,47 +88,59 @@ function DiceModel({
   const startRef = useRef<number>(0);
   const [rx, setRx] = useState(0);
   const [ry, setRy] = useState(0);
+  const rxRef = useRef(0);
+  const ryRef = useRef(0);
 
   useEffect(() => {
     if (phase === 'spinning') {
       startRef.current = performance.now();
+      let cancelled = false;
       const spin = () => {
+        if (cancelled) return;
         const t = (performance.now() - startRef.current) / SPIN_MS;
         if (t < 1) {
-          setRx((r) => r + 0.18);
-          setRy((r) => r + 0.24);
+          setRx((r) => {
+            const next = r + 0.18;
+            rxRef.current = next;
+            return next;
+          });
+          setRy((r) => {
+            const next = r + 0.24;
+            ryRef.current = next;
+            return next;
+          });
           requestAnimationFrame(spin);
         }
       };
       requestAnimationFrame(spin);
+      return () => {
+        cancelled = true;
+      };
     } else if (phase === 'settling' || phase === 'landed') {
       const v: FaceValue =
         value in TARGET_ROTATIONS ? (value as FaceValue) : 3;
       const [tx, ty] = TARGET_ROTATIONS[v];
-      setRx(nearestTurn(rx, tx));
-      setRy(nearestTurn(ry, ty));
+      const nextRx = nearestTurn(rxRef.current, tx);
+      const nextRy = nearestTurn(ryRef.current, ty);
+      rxRef.current = nextRx;
+      ryRef.current = nextRy;
+      setRx(nextRx);
+      setRy(nextRy);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, value]);
 
-  // Skip: jump directly to target
+  // Skip: jump directly to target via shortest-path turn
   useEffect(() => {
     if (skip && (value as FaceValue) in TARGET_ROTATIONS) {
       const [tx, ty] = TARGET_ROTATIONS[value as FaceValue];
-      setRx(tx);
-      setRy(ty);
+      const nextRx = nearestTurn(rxRef.current, tx);
+      const nextRy = nearestTurn(ryRef.current, ty);
+      rxRef.current = nextRx;
+      ryRef.current = nextRy;
+      setRx(nextRx);
+      setRy(nextRy);
     }
   }, [skip, value]);
-
-  // Lightweight useFrame for ambient wobble while spinning (preserves prior feel).
-  useFrame((_, delta) => {
-    const group = groupRef.current;
-    if (!group) return;
-    if (phase === 'spinning') {
-      group.rotation.x += delta * 6;
-      group.rotation.y += delta * 8;
-    }
-  });
 
   return (
     <group ref={groupRef} rotation={[rx, ry, 0]}>
