@@ -101,7 +101,8 @@ export function usePawnAnim(position: number, skip: boolean, onComplete?: () => 
 
     return () => {
       // Only cancel if this effect's generation is still active.
-      if (myGen === genRef.current) cancelRaf();
+      const currentGen = genRef.current;
+      if (myGen === currentGen) cancelRaf();
     };
   }, [anim, reduced, cancelRaf]);
 

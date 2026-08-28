@@ -76,11 +76,15 @@ export default function Board2D({
   players,
   snakes,
   ladders,
+  // currentTurn is received so the parent can derive visual state later (e.g.
+  // a turn indicator); Board2D itself doesn't need it now but the prop is part
+  // of the contract for future enhancements.
   currentTurn,
   glowTile = null,
   skipAnim = false,
   onAnimComplete,
 }: Props) {
+  void currentTurn;
   const specialTiles = useMemo(
     () => buildSpecialTileSet(snakes, ladders),
     [snakes, ladders],

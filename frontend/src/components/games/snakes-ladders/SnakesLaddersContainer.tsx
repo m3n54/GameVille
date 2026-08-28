@@ -109,7 +109,8 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
 
   // Defensive: during mid-game recovery the state may be partial — players could be
   // undefined/empty while currentTurn points past the end. Guard every indexed access.
-  const players = gameState?.players ?? [];
+  // Memoized so the useMemo for boardPlayers (line 129) doesn't invalidate on every render.
+  const players = useMemo(() => gameState?.players ?? [], [gameState]);
   const safeCurrentTurn = typeof gameState?.currentTurn === 'number' ? gameState.currentTurn : -1;
   const currentPlayer = players[safeCurrentTurn] ?? null;
   const isMyTurn = !!currentPlayer && currentPlayer.id === myId;

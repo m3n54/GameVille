@@ -27,8 +27,11 @@ export default function SoundFx({ onPlay }: Props) {
       refs.current[k] = new Audio(src);
       refs.current[k]!.preload = 'auto';
     });
+    // Snapshot the map at effect start so the cleanup uses the same ref values,
+    // not whatever has been added/removed by re-renders.
+    const snapshot = refs.current;
     return () => {
-      Object.values(refs.current).forEach((a) => a?.pause());
+      Object.values(snapshot).forEach((a) => a?.pause());
     };
   }, []);
 
