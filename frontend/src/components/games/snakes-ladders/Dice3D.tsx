@@ -68,7 +68,6 @@ const TARGET_ROTATIONS: Record<FaceValue, [number, number]> = {
 };
 
 const TWO_PI = Math.PI * 2;
-const DAMP_LAMBDA = 8; // settles in ~0.4s
 
 // Shortest-path target: nearest full-turn equivalent of the target angle.
 function nearestTurn(current: number, target: number): number {
