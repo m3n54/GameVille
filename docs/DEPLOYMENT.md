@@ -57,6 +57,7 @@ the value must be set for every environment (or preview builds will fall
 back to `http://localhost:3001` and fail to reach the backend).
 
 ### Build output
+
 Vercel runs `next build` automatically; the project is configured for
 standalone output. No custom build command is required.
 
