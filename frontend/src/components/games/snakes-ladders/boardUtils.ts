@@ -25,6 +25,17 @@ export function tileToWorld(tile: number): [number, number] {
   return [x, z];
 }
 
+/** Logical grid coordinates for a 2D CSS grid layout.
+ *  Odd rows are rendered right-to-left via `direction: rtl`,
+ *  so we return the un-flipped (numbering-order) position. */
+export function tileToGridPos(tile: number): { row: number; col: number } {
+  const clamped = Math.max(0, Math.min(99, Math.floor(tile)));
+  return {
+    row: Math.floor(clamped / GRID_SIZE),
+    col: clamped % GRID_SIZE,
+  };
+}
+
 const TILE_COLORS = [
   '#FFF5F7', // cute bg
   '#FFE4EC', // light pink
