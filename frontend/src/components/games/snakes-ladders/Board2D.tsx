@@ -12,12 +12,9 @@ interface PlayerState {
   id: string;
   position: number;
   color: string;
-  /** Optional snake/ladder traversal path. When the server reports a snake/ladder
-   *  hit on a dice result, the container synthesizes the full hop path including
-   *  the snake head + tail (or ladder bottom + top) so the pawn visits every tile. */
-  path?: number[];
-  /** Optional tagged traversal segments (walk vs sliding). T8 pass-through;
-   *  T11 will route these through usePawnAnim. */
+  /** Tagged traversal segments (walk vs sliding). The container synthesizes
+   *  these on every diceResult so the pawn can visit every intermediate tile
+   *  (walk step-by-step + slide continuous). Wired through usePawnAnim. */
   segments?: Segment[];
 }
 interface Props {
@@ -28,6 +25,9 @@ interface Props {
   glowTile?: { tile: number; kind: 'snake' | 'ladder' } | null;
   skipAnim?: boolean;
   onAnimComplete?: (playerId: string) => void;
+  /** Per-tile callback fired by usePawnAnim for each hop boundary. Container
+   *  uses this to dispatch the per-hop SFX (existing 'hop' kind). */
+  onTileEnter?: (playerId: string, tile: number, kind: 'walk' | 'sliding') => void;
 }
 
 const STACK_OFFSET_STEP_PX = 14;
@@ -51,13 +51,15 @@ function buildSpecialTileSet(
 function PawnLayer({
   p,
   skip,
+  onTileEnter,
   onComplete,
 }: {
   p: PlayerState;
   skip: boolean;
+  onTileEnter: (tile: number, kind: 'walk' | 'sliding') => void;
   onComplete: () => void;
 }) {
-  const display = usePawnAnim(p.position, skip, p.path, onComplete);
+  const display = usePawnAnim(p.position, skip, p.segments, onComplete, onTileEnter);
   const { row, col } = tileToGridPos(display.tile);
   // Multi-pawn per tile: deterministic vertical stack via charCode mod. Socket.IO
   // ids are A-Za-z0-9_- — `parseInt(., 16)` was NaN ~70% of the time, breaking
@@ -93,6 +95,7 @@ export default function Board2D({
   glowTile = null,
   skipAnim = false,
   onAnimComplete,
+  onTileEnter,
 }: Props) {
   void currentTurn;
   const specialTiles = useMemo(
@@ -171,6 +174,11 @@ export default function Board2D({
           key={p.id}
           p={p}
           skip={skipAnim}
+          onTileEnter={
+            onTileEnter
+              ? (tile, kind) => onTileEnter(p.id, tile, kind)
+              : () => {}
+          }
           onComplete={() => onAnimComplete?.(p.id)}
         />
       ))}

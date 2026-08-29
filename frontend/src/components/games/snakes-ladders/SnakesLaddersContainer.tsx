@@ -74,15 +74,13 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
         return;
       }
       if (action.type === 'diceResult') {
-        // Roll + hop SFX are per-player (only fire for the rolling player). Snake/ladder
-        // glow + SFX are world events — everyone sees/hears them.
+        // Roll SFX fires once per dice (world-like — the roll is a single
+        // discrete event). Per-hop SFX is dispatched by handleTileEnter (the
+        // anim fires `onTileEnter` for every hop boundary).
         if (action.playerId === myId) {
           dispatchSfx('roll');
           if (typeof action.value === 'number') {
             setSkipAnim(false); // fresh hop sequence per dice
-            // Fire hop SFX synchronously (was setTimeout(0) which raced the
-            // Board2D RAF — the ~1 frame slip is inaudible).
-            dispatchSfx('hop');
           }
         }
         if (action.snakeHit) {
@@ -161,21 +159,26 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
   );
 
   const boardPlayers = useMemo(
-    () => players.map((p) => {
-      const segs = segments[p.id];
-      // Flatten segments to a flat tile path so Board2D's current usePawnAnim
-      // (which still consumes `path`) keeps its snake/ladder traversal until T11
-      // rewires it to consume `segments` directly. Drop undefined segments.
-      const flatPath = segs && segs.length > 0 ? segs.flatMap((s) => s.tiles) : undefined;
-      return {
-        id: p.id,
-        position: p.position,
-        color: p.color,
-        path: flatPath,
-        segments: segs,
-      };
-    }),
+    () => players.map((p) => ({
+      id: p.id,
+      position: p.position,
+      color: p.color,
+      segments: segments[p.id],
+    })),
     [players, segments],
+  );
+
+  // Per-tile SFX — fired by usePawnAnim on every hop boundary. We only
+  // dispatch the per-hop 'hop' SFX for the rolling player; world SFX
+  // (roll/snake/ladder/win) are dispatched in handleAction above.
+  const handleTileEnter = useCallback(
+    (playerId: string, tile: number, kind: 'walk' | 'sliding') => {
+      if (kind === 'walk' && playerId === myId) {
+        dispatchSfx('hop');
+      }
+      void tile;
+    },
+    [myId],
   );
 
   if (!gameState) {
@@ -240,6 +243,7 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
           currentTurn={safeCurrentTurn}
           glowTile={glow}
           skipAnim={skipAnim}
+          onTileEnter={handleTileEnter}
           onAnimComplete={() => setSkipAnim(false)}
         />
       </div>
