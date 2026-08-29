@@ -55,12 +55,44 @@ export class MinesweeperEngine extends BaseGame {
       if (state.phase !== 'config') {
         return { newState: state, events: [{ type: 'error', data: { message: 'Permainan sudah dimulai!' } }] };
       }
-      const payload = (action.payload ?? {}) as { difficulty?: string; mode?: string };
+      const payload = (action.payload ?? {}) as {
+        difficulty?: string;
+        mode?: string;
+        bombMode?: 'fixed' | 'random' | 'custom';
+        bombRange?: { min: number; max: number };
+        customBombCount?: number;
+      };
       const difficulty = (
         payload.difficulty && payload.difficulty in DIFFICULTY_CONFIG ? payload.difficulty : 'sedang'
       ) as MinesweeperDifficulty;
       const mode = payload.mode === 'tantangan' ? 'tantangan' : 'santai';
-      const [rows, cols, bombCount] = DIFFICULTY_CONFIG[difficulty];
+      const [rows, cols, defaultBombCount] = DIFFICULTY_CONFIG[difficulty];
+
+      // baseMaxBombs: 3x3 first-click safety neighborhood (C6).
+      const baseMaxBombs = rows * cols - 9;
+
+      const bombMode = payload.bombMode ?? 'fixed';
+      let bombCount: number;
+      if (bombMode === 'fixed') {
+        bombCount = defaultBombCount;
+      } else if (bombMode === 'random') {
+        const range = payload.bombRange ?? { min: 9, max: baseMaxBombs };
+        if (
+          typeof range.min !== 'number' || typeof range.max !== 'number' ||
+          range.min < 9 || range.max > baseMaxBombs || range.min > range.max
+        ) {
+          return { newState: state, events: [{ type: 'error', data: { message: 'Range bom tidak valid (min >= 9, max <= ' + baseMaxBombs + ')' } }] };
+        }
+        bombCount = Math.floor(Math.random() * (range.max - range.min + 1)) + range.min;
+      } else if (bombMode === 'custom') {
+        const n = payload.customBombCount;
+        if (typeof n !== 'number' || n < 9 || n > baseMaxBombs) {
+          return { newState: state, events: [{ type: 'error', data: { message: 'Jumlah bom harus 9-' + baseMaxBombs } }] };
+        }
+        bombCount = n;
+      } else {
+        bombCount = defaultBombCount;
+      }
 
       state.difficulty = difficulty;
       state.mode = mode;
@@ -68,8 +100,9 @@ export class MinesweeperEngine extends BaseGame {
       state.cols = cols;
       state.bombCount = bombCount;
       // C6: defer grid generation to the first reveal so the first click is
-      // guaranteed safe (3x3 around the click is bomb-free).
-      state.phase = 'playing';
+      // guaranteed safe (3x3 around the click is bomb-free). phase stays
+      // 'config' until that reveal happens.
+      // (state.phase remains 'config' here)
 
       events.push({ type: 'gameStart', data: { firstTurnId: state.playerOrder[0] } });
       return { newState: { ...state }, events };
