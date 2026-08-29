@@ -23,8 +23,6 @@ interface Props {
   ladders: [number, number][];
   currentTurn: number;
   glowTile?: { tile: number; kind: 'snake' | 'ladder' } | null;
-  skipAnim?: boolean;
-  onAnimComplete?: (playerId: string) => void;
   /** Per-tile callback fired by usePawnAnim for each hop boundary. Container
    *  uses this to dispatch the per-hop SFX (existing 'hop' kind). */
   onTileEnter?: (playerId: string, tile: number, kind: 'walk' | 'sliding') => void;
@@ -51,16 +49,14 @@ function buildSpecialTileSet(
 
 function PawnLayer({
   p,
-  skip,
   onTileEnter,
   onComplete,
 }: {
   p: PlayerState;
-  skip: boolean;
   onTileEnter: (tile: number, kind: 'walk' | 'sliding') => void;
   onComplete: () => void;
 }) {
-  const display = usePawnAnim(p.position, skip, p.segments, onComplete, onTileEnter);
+  const display = usePawnAnim(p.position, p.segments, onComplete, onTileEnter);
   const { row, col } = tileToGridPos(display.tile);
   // Multi-pawn per tile: deterministic 2D diagonal slot via charCode mod. Socket.IO
   // ids are A-Za-z0-9_- — `parseInt(., 16)` was NaN ~70% of the time, breaking
@@ -99,8 +95,6 @@ export default function Board2D({
   // of the contract for future enhancements.
   currentTurn,
   glowTile = null,
-  skipAnim = false,
-  onAnimComplete,
   onTileEnter,
 }: Props) {
   void currentTurn;
@@ -179,13 +173,12 @@ export default function Board2D({
         <PawnLayer
           key={p.id}
           p={p}
-          skip={skipAnim}
           onTileEnter={
             onTileEnter
               ? (tile, kind) => onTileEnter(p.id, tile, kind)
               : () => {}
           }
-          onComplete={() => onAnimComplete?.(p.id)}
+          onComplete={() => {}}
         />
       ))}
     </div>

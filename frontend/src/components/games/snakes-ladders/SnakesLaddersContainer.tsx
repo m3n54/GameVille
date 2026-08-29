@@ -43,7 +43,6 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
   const [rolling, setRolling] = useState(false);
   const [message, setMessage] = useState('');
   const [glow, setGlow] = useState<{ tile: number; kind: 'snake' | 'ladder' } | null>(null);
-  const [skipAnim, setSkipAnim] = useState(false);
   // Per-player animation segments, indexed by socket id. Reset on each new dice roll
   // for the rolling player; other players keep their previous segments until their
   // own diceResult arrives.
@@ -79,9 +78,6 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
         // anim fires `onTileEnter` for every hop boundary).
         if (action.playerId === myId) {
           dispatchSfx('roll');
-          if (typeof action.value === 'number') {
-            setSkipAnim(false); // fresh hop sequence per dice
-          }
         }
         if (action.snakeHit) {
           const [head] = action.snakeHit;
@@ -224,29 +220,15 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
         )}
       </AnimatePresence>
 
-      {/* 2D Board — tap to skip current hop/slide animation */}
-      <div
-        onClick={() => {
-          if (!skipAnim) setSkipAnim(true);
-        }}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if ((e.key === 'Enter' || e.key === ' ') && !skipAnim) setSkipAnim(true);
-        }}
-        aria-label="Papan ular tangga — ketuk untuk melewati animasi"
-      >
-        <Board2D
-          players={boardPlayers}
-          snakes={snakes}
-          ladders={ladders}
-          currentTurn={safeCurrentTurn}
-          glowTile={glow}
-          skipAnim={skipAnim}
-          onTileEnter={handleTileEnter}
-          onAnimComplete={() => setSkipAnim(false)}
-        />
-      </div>
+      {/* 2D Board */}
+      <Board2D
+        players={boardPlayers}
+        snakes={snakes}
+        ladders={ladders}
+        currentTurn={safeCurrentTurn}
+        glowTile={glow}
+        onTileEnter={handleTileEnter}
+      />
 
       {/* Dice */}
       <div className="flex justify-center">

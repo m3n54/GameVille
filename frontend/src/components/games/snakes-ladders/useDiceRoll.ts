@@ -26,8 +26,9 @@ export function useDiceRoll(value: number | null, rolling: boolean) {
       setPhase('spinning');
       startRef.current = performance.now();
     } else if (phaseRef.current === 'spinning' && value != null) {
-      const t = (performance.now() - startRef.current) / SPIN_MS;
-      const remaining = Math.max(0, 1 - t);
+      const tRaw = (performance.now() - startRef.current) / SPIN_MS;
+      const t = Math.max(0, Math.min(1, tRaw));
+      const remaining = 1 - t;
       setTarget(value as FaceValue);
       const wait = remaining * SPIN_MS;
       const t1 = setTimeout(() => setPhase('settling'), wait);
@@ -56,16 +57,8 @@ export function useDiceRoll(value: number | null, rolling: boolean) {
     return () => cancelAnimationFrame(raf);
   }, [phase]);
 
-  const skip = () => {
-    if (phase !== 'landed' && value != null) {
-      setTarget(value as FaceValue);
-      setProgress(1);
-      setPhase('landed');
-    }
-  };
-
   // Eased progress (0..1) — Dice3D reads this for angular velocity.
   const easedProgress = easeOutCubic(progress);
 
-  return { phase, target, skip, progress, easedProgress };
+  return { phase, target, progress, easedProgress };
 }

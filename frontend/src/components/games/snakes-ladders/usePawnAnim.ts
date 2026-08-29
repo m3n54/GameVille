@@ -37,7 +37,6 @@ export type TileEnterKind = 'walk' | 'sliding';
 
 export function usePawnAnim(
   position: number,
-  skip: boolean,
   segments?: Segment[],
   onComplete?: () => void,
   onTileEnter?: (tile: number, kind: TileEnterKind) => void,
@@ -113,20 +112,6 @@ export function usePawnAnim(
     }
     setAnim({ path: nextPath, phase, segments: nextSegments });
   }, [position, segments]);
-
-  // Skip → snap to end-state. Fires onComplete for BOTH walking and sliding.
-  useEffect(() => {
-    if (!skip) return;
-    const cur = animRef.current;
-    if (cur.phase === 'idle') return;
-    const lastTile = cur.path[cur.path.length - 1] ?? 0;
-    cancelRaf();
-    clearDelay();
-    genRef.current++;
-    setAnim({ path: [lastTile], phase: 'idle' });
-    setDisplay({ tile: lastTile, phase: 'idle' });
-    onCompleteRef.current?.();
-  }, [skip, cancelRaf, clearDelay]);
 
   // Tick effect — restarts whenever `anim` changes (real state transitions, not per-frame).
   useEffect(() => {

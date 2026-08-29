@@ -78,11 +78,9 @@ function nearestTurn(current: number, target: number): number {
 function DiceModel({
   value,
   phase,
-  skip,
 }: {
   value: number;
   phase: RollPhase;
-  skip: boolean;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   // `rx`/`ry` are the React-mirrored rotation, used only for terminal settle / skip
@@ -133,25 +131,6 @@ function DiceModel({
   }, [phase, value]);
 
   // Skip: jump directly to target via shortest-path turn (one-shot state write).
-  useEffect(() => {
-    if (skip && (value as FaceValue) in TARGET_ROTATIONS) {
-      const [tx, ty] = TARGET_ROTATIONS[value as FaceValue];
-      const g = groupRef.current;
-      const curX = g ? g.rotation.x : rxRef.current;
-      const curY = g ? g.rotation.y : ryRef.current;
-      const nextRx = nearestTurn(curX, tx);
-      const nextRy = nearestTurn(curY, ty);
-      if (g) {
-        g.rotation.x = nextRx;
-        g.rotation.y = nextRy;
-      }
-      rxRef.current = nextRx;
-      ryRef.current = nextRy;
-      setRx(nextRx);
-      setRy(nextRy);
-    }
-  }, [skip, value]);
-
   return (
     <group ref={groupRef} rotation={[rx, ry, 0]}>
       {/* Cube body */}
@@ -196,18 +175,17 @@ export default function Dice3D({
   onRoll,
   disabled,
 }: Dice3DProps): JSX.Element {
-  const { phase, target, skip } = useDiceRoll(value, rolling);
-  const [skipAnim, setSkipAnim] = useState(false);
+  const { phase, target } = useDiceRoll(value, rolling);
 
   return (
     <div className="flex flex-col items-center gap-3">
-      <div className="w-36 h-36">
+      <div className="relative w-36 h-36">
         <Canvas camera={{ position: [0, 0, 4.6], fov: 45 }}>
           <ambientLight intensity={0.65} />
           <pointLight position={[4, 6, 5]} intensity={0.9} />
           <pointLight position={[-4, -3, 3]} intensity={0.35} />
           <group position={[0, 0.15, 0]}>
-            <DiceModel value={value || target} phase={phase} skip={skipAnim} />
+            <DiceModel value={value || target} phase={phase} />
           </group>
           {/* Soft ground shadow */}
           <mesh position={[0, -1.15, 0]} rotation={[-Math.PI / 2, 0, 0]}>
@@ -215,28 +193,30 @@ export default function Dice3D({
             <meshBasicMaterial color="#E8C7D3" transparent opacity={0.45} />
           </mesh>
         </Canvas>
+        {/* R6: number overlay so user always sees the dice value clearly */}
+        {value != null && phase === 'landed' && (
+          <div
+            className="pointer-events-none absolute inset-0 flex items-center justify-center"
+            aria-label={`Dadu menunjukkan ${value}`}
+          >
+            <span className="text-6xl font-black text-primary drop-shadow-md leading-none">
+              {value}
+            </span>
+          </div>
+        )}
       </div>
       <motion.button
         whileHover={!disabled ? { scale: 1.1 } : {}}
         whileTap={!disabled ? { scale: 0.9 } : {}}
         transition={{ type: 'spring', stiffness: 300, damping: 20 }}
         onClick={() => {
-          if (phase === 'spinning' || phase === 'settling') {
-            skip();
-            setSkipAnim(true);
-          } else if (!disabled) {
-            onRoll();
-          }
+          if (!disabled) onRoll();
         }}
         disabled={disabled}
         className={`px-6 py-3 bg-primary text-white font-bold rounded-button shadow-soft
           transition-all ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-pink-400'}`}
       >
-        {phase === 'spinning'
-          ? '⏩ Lewati (tap)'
-          : phase === 'settling'
-            ? '⏩ Mendarat...'
-            : '🎲 Lempar Dadu!'}
+        🎲 Lempar Dadu!
       </motion.button>
     </div>
   );
