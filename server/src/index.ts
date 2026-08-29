@@ -320,12 +320,25 @@ io.on('connection', (socket) => {
         case 'gameOver':
           broadcastGameOver(io, instance, event.data.winnerId as string);
           break;
-        case 'fireResult':
+        case 'fireResult': {
+          // C4: per-player projection. Each room member must receive a
+          // stateForClient call with their OWN forPlayerId so anti-cheat
+          // projection (seaBattleView strips opponent 'S' markers) shows
+          // them their own view, not the shooter's. Previously the
+          // io.to() broadcast sent the shooter's projection to everyone
+          // and the socket.to() fallback used no forPlayerId, which made
+          // the non-shooter always see player1's perspective.
+          const room = getRoom(instance.roomId);
+          if (room) {
+            for (const player of room.players) {
+              const projection = stateForClient(instance.gameType, instance.state, player.id);
+              io.to(player.id).emit('game:state', projection);
+            }
+          }
+          // The shooter also gets the fireResult event for hit/miss feedback
           socket.emit('game:action', { type: 'fireResult', ...event.data });
-          io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state, socket.id));
-          // Everyone else gets their own projection of the same board change
-          socket.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
           break;
+        }
         case 'gameStart': {
           // Minesweeper config uses firstTurnId; sea battle uses firstTurn
           io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
