@@ -41,6 +41,11 @@ export default function RoomPage() {
   // F9 grace timer below reads it to decide whether to show the join form.
   // Per-page (useRef) so navigating to a different /room/[pin] resets it.
   const everHadRoomRef = useRef(false);
+  // H5: guard against the mount-sync effect and the reconnect effect both
+  // calling `syncRoom` in the same tick. Without this, both effects fire
+  // on a fresh mount (e.g. tab refresh right after a reconnect) and the
+  // server runs `room:sync` twice, racing the ack callbacks.
+  const isSyncingRef = useRef(false);
 
   // After navigation the component is fresh — ask the server for room state.
   // Mid-game recovery: server replays the current game snapshot + whose turn
@@ -53,21 +58,23 @@ export default function RoomPage() {
   // late if F9's setTimeout already armed with the old `false` value.
   useEffect(() => {
     if (!socket || !connected) return;
-    if (!room) {
-      syncRoom(pin, (state, turnPlayerId) => {
-        everHadRoomRef.current = true;
-        if (state != null) {
-          setGameState(state);
-          setGameActive(true);
-        }
-        if (turnPlayerId) {
-          // Hand the recovered turn to any container that just mounted —
-          // dispatched after mount via a microtask-safe custom event is
-          // overkill; containers read this through their own sync callback.
-          window.dispatchEvent(new CustomEvent('gameville:turn', { detail: turnPlayerId }));
-        }
-      });
-    }
+    if (room) return;
+    if (isSyncingRef.current) return; // H5: another effect already triggered sync
+    isSyncingRef.current = true;
+    syncRoom(pin, (state, turnPlayerId) => {
+      isSyncingRef.current = false;
+      everHadRoomRef.current = true;
+      if (state != null) {
+        setGameState(state);
+        setGameActive(true);
+      }
+      if (turnPlayerId) {
+        // Hand the recovered turn to any container that just mounted —
+        // dispatched after mount via a microtask-safe custom event is
+        // overkill; containers read this through their own sync callback.
+        window.dispatchEvent(new CustomEvent('gameville:turn', { detail: turnPlayerId }));
+      }
+    });
   }, [socket, connected, pin, room, syncRoom]);
 
   // F9 fix: if 1.5s after a successful socket connect we still have no room,
@@ -110,10 +117,14 @@ export default function RoomPage() {
   }, [connected, socket]);
 
   const setRoomNullThenSync = () => {
+    // H5: skip if the mount-sync effect is already in flight.
+    if (isSyncingRef.current) return;
+    isSyncingRef.current = true;
     // Clear local state first so the sync effect's `!room` gate re-runs.
     // syncRoom itself re-fetches regardless; clearing avoids stale renders
     // between reconnect and ack.
     syncRoom(pin, (state, turnPlayerId) => {
+      isSyncingRef.current = false;
       // Same gate as the mount effect — a reconnected member whose sync ack
       // takes >1.5s must not see the F9 join form pop over their game.
       everHadRoomRef.current = true;
