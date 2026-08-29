@@ -30,7 +30,8 @@ interface Props {
   onTileEnter?: (playerId: string, tile: number, kind: 'walk' | 'sliding') => void;
 }
 
-const STACK_OFFSET_STEP_PX = 14;
+const STACK_OFFSET_STEP_PX = 6;
+const PAWN_SIZE_PX = 30;
 
 function buildSpecialTileSet(
   snakes: [number, number][],
@@ -61,16 +62,21 @@ function PawnLayer({
 }) {
   const display = usePawnAnim(p.position, skip, p.segments, onComplete, onTileEnter);
   const { row, col } = tileToGridPos(display.tile);
-  // Multi-pawn per tile: deterministic vertical stack via charCode mod. Socket.IO
+  // Multi-pawn per tile: deterministic 2D diagonal slot via charCode mod. Socket.IO
   // ids are A-Za-z0-9_- — `parseInt(., 16)` was NaN ~70% of the time, breaking
   // CSS. charCodeAt always returns a number; mod 4 caps the visible offset.
-  const stackOffset = ((p.id.charCodeAt(p.id.length - 1) || 0) % 4) * STACK_OFFSET_STEP_PX;
+  // slot 0 = center, 1 = NE, 2 = SE, 3 = SW (3rd player goes to opposite of 2nd for visual spread).
+  const slot = (p.id.charCodeAt(p.id.length - 1) || 0) % 4;
+  const stackDx = slot === 0 ? 0 : slot === 1 ? 1 : slot === 2 ? 1 : -1;
+  const stackDy = slot === 0 ? 0 : slot === 1 ? -1 : slot === 2 ? 1 : 1;
+  const stackOffsetX = stackDx * STACK_OFFSET_STEP_PX;
+  const stackOffsetY = stackDy * STACK_OFFSET_STEP_PX;
   return (
     <div
       className="absolute"
       style={{
-        left: `calc(${(col + 0.5) / GRID_SIZE * 100}% + 4px)`,
-        top: `calc(${(row + 0.5) / GRID_SIZE * 100}% + ${stackOffset}px)`,
+        left: `calc(${(col + 0.5) / GRID_SIZE * 100}% + ${4 + stackOffsetX}px)`,
+        top: `calc(${(row + 0.5) / GRID_SIZE * 100}% + ${stackOffsetY}px)`,
         transform: 'translate(-50%, -50%)',
         transition:
           display.phase === 'sliding'
@@ -79,7 +85,7 @@ function PawnLayer({
         zIndex: 20,
       }}
     >
-      <PawnSVG color={p.color} phase={display.phase} />
+      <PawnSVG color={p.color} phase={display.phase} size={PAWN_SIZE_PX} />
     </div>
   );
 }
