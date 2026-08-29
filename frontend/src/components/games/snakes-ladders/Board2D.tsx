@@ -6,6 +6,7 @@ import LadderSVG from './LadderSVG';
 import PawnSVG from './PawnSVG';
 import { tileToGridPos, tileCenter, GRID_SIZE, tileColor } from './boardUtils';
 import { usePawnAnim } from './usePawnAnim';
+import type { Segment } from './types';
 
 interface PlayerState {
   id: string;
@@ -15,6 +16,9 @@ interface PlayerState {
    *  hit on a dice result, the container synthesizes the full hop path including
    *  the snake head + tail (or ladder bottom + top) so the pawn visits every tile. */
   path?: number[];
+  /** Optional tagged traversal segments (walk vs sliding). T8 pass-through;
+   *  T11 will route these through usePawnAnim. */
+  segments?: Segment[];
 }
 interface Props {
   players: PlayerState[];

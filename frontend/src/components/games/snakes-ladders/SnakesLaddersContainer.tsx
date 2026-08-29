@@ -8,6 +8,8 @@ import Dice3D from './Dice3D';
 import SoundFx from './SoundFx';
 import Confetti from './Confetti';
 import { SLIDE_MAX_MS } from './usePawnAnim';
+import { buildSegments } from './paths';
+import type { Segment } from './types';
 import type { SnakesLaddersState, ServerToClientEvents, ClientToServerEvents } from '@/types';
 
 interface Props {
@@ -36,46 +38,16 @@ const dispatchSfx = (kind: 'roll' | 'hop' | 'snake' | 'ladder' | 'win') => {
   window.dispatchEvent(new CustomEvent('gameville:sfx', { detail: kind }));
 };
 
-/** Build the full traversal path for a pawn after a dice roll.
- *  - Plain hop: each intermediate tile from `from+1` to `to`.
- *  - Snake bite: hop to snake head, then slide to tail in 1-tile steps so the
- *    pawn visibly traverses the snake body.
- *  - Ladder climb: hop to ladder bottom, then climb to top in 1-tile steps. */
-function buildPath(
-  from: number,
-  to: number,
-  snakeHit: [number, number] | null,
-  ladderHit: [number, number] | null,
-): number[] {
-  const dir = Math.sign(to - from) || 1;
-  const stepCount = Math.abs(to - from);
-  const tiles: number[] = [];
-  for (let i = 1; i <= stepCount; i++) tiles.push(from + dir * i);
-
-  if (snakeHit) {
-    const [head, tail] = snakeHit;
-    const sDir = Math.sign(tail - head) || 1;
-    const sLen = Math.abs(tail - head);
-    for (let i = 1; i <= sLen; i++) tiles.push(head + sDir * i);
-  } else if (ladderHit) {
-    const [bottom, top] = ladderHit;
-    const lDir = Math.sign(top - bottom) || 1;
-    const lLen = Math.abs(top - bottom);
-    for (let i = 1; i <= lLen; i++) tiles.push(bottom + lDir * i);
-  }
-  return tiles;
-}
-
 export default function SnakesLaddersContainer({ socket, state: initial }: Props) {
   const [gameState, setGameState] = useState<SnakesLaddersState | null>(initial);
   const [rolling, setRolling] = useState(false);
   const [message, setMessage] = useState('');
   const [glow, setGlow] = useState<{ tile: number; kind: 'snake' | 'ladder' } | null>(null);
   const [skipAnim, setSkipAnim] = useState(false);
-  // Per-player animation paths, indexed by socket id. Reset on each new dice roll
-  // for the rolling player; other players keep their previous path until their
+  // Per-player animation segments, indexed by socket id. Reset on each new dice roll
+  // for the rolling player; other players keep their previous segments until their
   // own diceResult arrives.
-  const [paths, setPaths] = useState<Record<string, number[] | undefined>>({});
+  const [segments, setSegments] = useState<Record<string, Segment[] | undefined>>({});
   const glowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Guard against win SFX replay on tab remount (isMyWin is true on first render
   // after refresh of a finished game; we want it to fire once per actual win).
@@ -122,13 +94,13 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
           setGlow({ tile: bottom, kind: 'ladder' });
           dispatchSfx('ladder');
         }
-        // Compute and store the full traversal path for the rolling player so
+        // Compute and store the full traversal segments for the rolling player so
         // Board2D can animate hop-by-hop through the snake head/tail (or ladder
         // bottom/top) instead of jumping pre-snake to post-snake in one step.
         const from = (gameState?.players ?? []).find((p) => p.id === action.playerId)?.position ?? 0;
-        setPaths((prev) => ({
+        setSegments((prev) => ({
           ...prev,
-          [action.playerId]: buildPath(from, action.newPosition, action.snakeHit, action.ladderHit),
+          [action.playerId]: buildSegments(from, action.newPosition, action.snakeHit, action.ladderHit),
         }));
         // Glow must outlive the slide animation (SLIDE_MAX_MS = 4000) — the old
         // 1200ms timer made the highlight vanish mid-slide for every snake/ladder.
@@ -189,13 +161,21 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
   );
 
   const boardPlayers = useMemo(
-    () => players.map((p) => ({
-      id: p.id,
-      position: p.position,
-      color: p.color,
-      path: paths[p.id],
-    })),
-    [players, paths],
+    () => players.map((p) => {
+      const segs = segments[p.id];
+      // Flatten segments to a flat tile path so Board2D's current usePawnAnim
+      // (which still consumes `path`) keeps its snake/ladder traversal until T11
+      // rewires it to consume `segments` directly. Drop undefined segments.
+      const flatPath = segs && segs.length > 0 ? segs.flatMap((s) => s.tiles) : undefined;
+      return {
+        id: p.id,
+        position: p.position,
+        color: p.color,
+        path: flatPath,
+        segments: segs,
+      };
+    }),
+    [players, segments],
   );
 
   if (!gameState) {
