@@ -100,12 +100,12 @@ export function handlePlayerExit(io: IO, socket: Socket): void {
   if (!game) return;
 
   if (room.state === 'finished') {
-    GAMES.delete(result.roomId);
-    // Reset to 'waiting' so a player who left the winner modal can rejoin the
-    // same PIN via the F9 rejoin form (rooms.ts:leaveRoom preserves finished
-    // rooms when empty). Broadcast the state change so any remaining members
-    // also see the room re-open rather than staying stuck on the "Game
-    // selesai" overlay with no path forward.
+    // C5: GameInstance was already deleted by broadcastGameOver (the single
+    // source of truth for GAMES cleanup). The room state is reset here so
+    // a player who left the winner modal can rejoin via the F9 rejoin form
+    // (rooms.ts:leaveRoom preserves finished rooms when empty). Broadcast
+    // the state change so any remaining members see the room re-open
+    // rather than staying stuck on the "Game selesai" overlay.
     setRoomState(result.roomId, 'waiting');
     io.to(result.roomId).emit('room:state', room);
     return;

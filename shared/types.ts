@@ -84,7 +84,9 @@ export interface SnakesLaddersState {
   players: { id: string; position: number; color: string }[];
   currentTurn: number;
   diceValue: number | null;
-  phase: 'rolling' | 'moving' | 'animating' | 'done';
+  // M7: 'animating' removed — engine never sets it. Use 'moving' for client-driven
+  // animation phases (the client interpolates position changes during 'moving').
+  phase: 'rolling' | 'moving' | 'done';
   snakes: [number, number][];
   ladders: [number, number][];
   winner: string | null;
@@ -99,8 +101,16 @@ export interface HangmanState {
   correctLetters: (string | null)[];
   remainingAttempts: number;
   currentTurn: number;
-  winner: string | null;
+  // H8: tighten winner type — engine uses 'team' (co-op win) or 'none'
+  // (abandoned), or a specific playerId for solo win. Was `string | null`
+  // which let TypeScript accept arbitrary garbage.
+  winner: 'team' | 'none' | string | null;
 }
+
+// Client-facing projection of HangmanState. The secret word is stripped while
+// playing and revealed on game-over. Shared with frontend so the view type is
+// part of the public contract (was server-only in games/hangman.ts:5).
+export type HangmanView = HangmanState & { playerOrder: string[] };
 
 export interface Ship {
   type: string;
@@ -151,11 +161,15 @@ export interface Cell {
 export interface MinesweeperState {
   difficulty: MinesweeperDifficulty;
   mode: MinesweeperMode;
+  // M6: phase field added — engine uses 'config' (pre-first-click) and
+  // 'playing' (grid generated, accepting reveals). The grid is null until
+  // the first reveal action triggers lazy generation (C6 first-click safety).
+  phase: 'config' | 'playing';
   rows: number;
   cols: number;
   bombCount: number;
   // Server-side truth (never sent raw to clients while playing):
-  grid: Cell[][];
+  grid: Cell[][] | null;     // null until first reveal (C6)
   revealedSafeCount: number;
   totalSafeCells: number;
   currentTurn: number;        // index into playerOrder

@@ -2,6 +2,68 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Commands
+
+No test framework configured. Verification = `tsc --noEmit` + `next build` + manual 2-tab smoke.
+
+```bash
+# Install (per workspace)
+cd server   && npm install
+cd frontend && npm install
+
+# Dev (two terminals)
+cd server   && npm run dev   # tsx watch → http://localhost:3001
+cd frontend && npm run dev   # next dev   → http://localhost:3000
+
+# Production
+cd server   && npm run build && npm start  # compiles to dist/
+cd frontend && npm run build && npm start  # next start on :3000
+
+# Type-check (no emit)
+cd frontend && npx tsc --noEmit
+cd server   && npx tsc --noEmit
+
+# Lint
+cd frontend && npm run lint   # next lint (eslint-config-next)
+
+# Full stack local launcher (opens 2 PowerShell windows: server + ngrok)
+powershell -File "C:\Menza\start-gameville.ps1"
+```
+
+The launcher sets `$env:CORS_ORIGIN` in the parent scope BEFORE `Start-Process` — PowerShell's arg parser splits commas inside child commands if set inline. See **Windows / Git Bash quirks** below.
+
+## Architecture
+
+Two workspaces: **`frontend/`** (Next.js 14 App Router, React 18) and **`server/`** (Express + Socket.io 4). Shared TypeScript types live in **`shared/types.ts`** and are imported by both sides via the `GameType` / `SnakesLaddersState` / `ClientToServerEvents` / `ServerToClientEvents` contracts.
+
+**Backend flow** (`server/src/index.ts`):
+1. Express app + Socket.io server on port 3001.
+2. `gameService.ts` is the single entry point for socket events. It dispatches by `gameType` to one of the engines in `server/src/games/` (base class in `base.ts`, concrete: `hangman.ts`, `minesweeper.ts`, `sea-battle.ts`, `snakes-ladders.ts`).
+3. `rooms.ts` is the source of truth for membership: `createRoom`, `joinRoom`, `findByPin`, `findByPlayer` (socket-id lookup, used for mid-game recovery — never use `findByPin` mid-game; it only matches `'waiting'` rooms).
+4. `removePlayer` is called by BOTH `room:leave` and `socket disconnect` (H1+H2 fix). The engine prunes the leaver from `playerOrder` so turns never rotate to a ghost.
+5. Server is **authoritative** — clients send intent (`game:action { type: 'roll' }`), server computes state and broadcasts. NEVER move game logic to the client.
+
+**Frontend flow** (`frontend/src/`):
+- `app/page.tsx` — landing (create/join form).
+- `app/room/[pin]/page.tsx` — room page; calls `room:sync { pin }` on mount. Server replies via ack callback (with `gameState` + `turnPlayerId`) if socket is still a member. F9 grace timer (1.5s) shows the JoinRoom form pre-filled with the URL's PIN if not a member.
+- `hooks/useRoom.ts` — exposes `joinRoom`, `leaveRoom`, `toggleReady`, `selectGame`, `startGame`, `syncRoom`. Reads from module-scoped `lib/roomStore.ts` (NOT `useState` — that lost state on landing→room navigation, bug commit a61e4b2).
+- `lib/socket.ts` — module-level `let socket` singleton. `useSocket()` must never disconnect.
+- `lib/roomStore.ts` — module-scoped singleton, read by `useRoom` via `useSyncExternalStore`. Same pattern as `socket.ts`.
+- `components/lobby/` — CreateRoom, JoinRoom (accepts `initialPin` for the F9 paste-URL flow).
+- `components/room/` — Lobby (waiting room, ready/start), ChatBox, EmojiReactions, ConnectionStatus, GameErrorBanner.
+- `components/games/{hangman,minesweeper,sea-battle,snakes-ladders}/` — one folder per game. Each has a `*Container.tsx` (subscribes to socket events + dispatches actions) and game-specific components.
+- `components/ui/` — Button, Card, shared primitives.
+- `styles/` — Tailwind global + tokens. Tailwind is the only styling layer (no CSS modules, no inline styles except brief-mandated dynamic values).
+
+**Snakes-ladders specifics** (largest game, has the most footguns):
+- `SnakesLaddersContainer.tsx` — single source of truth for SL events; computes `segments` (walk vs sliding) via `paths.ts` and dispatches per-tile SFX via `onTileEnter`.
+- `Board2D.tsx` — 2D CSS grid + SVG overlay. **Z-stack contract** (R3+R4): tile grid z=10, SVG overlay z=15 (snakes/ladders/glow), pawns z=20.
+- `Dice3D.tsx` + `useDiceRoll.ts` — R3F cube; spin via `useFrame` mutating `groupRef.current.rotation` directly. Number overlay (R6) renders HTML on top.
+- `usePawnAnim.ts` — per-hop state machine with `easeInOutCubic` + 80ms inter-hop delay. **No skip** (R6).
+- `boardUtils.ts` — boustrophedon-aware `tileCenter` (visual col flipped for odd rows). All tile→world math goes through here; never inline `(col - 4.5) * ...` formulas.
+
+When adding a new game, mirror this structure: a folder under `components/games/<name>/`, a `<Name>Container.tsx` that subscribes to `socket.on('game:state', ...)` and `socket.on('game:action', ...)`, an engine in `server/src/games/<name>.ts` extending `BaseGame`, and a registration in `gameService.ts`'s `handleAction` switch.
+
 ## Critical Architectural Rules (footguns)
 
 These were each source of production bugs. Don't regress them.

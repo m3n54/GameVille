@@ -1,8 +1,9 @@
 import { BaseGame, GameEvent } from './base';
-import { GameType, HangmanState } from '../types';
+import { GameType, HangmanState, HangmanView } from '../types';
 
-// Client-facing projection — the secret word must never reach clients while playing
-export type HangmanView = HangmanState & { playerOrder: string[] };
+// HangmanView is now exported from shared/types.ts so the frontend can import
+// the same type. (Previously redeclared here, which caused drift if the
+// projection shape changed.)
 
 export function toHangmanView(state: HangmanExtendedState): HangmanView {
   if (state.winner) {

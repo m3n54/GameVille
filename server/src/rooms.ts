@@ -199,6 +199,14 @@ export function resetRoomForNewGame(roomId: string): Room | null {
   return room;
 }
 
+// C5: single source of truth for GameInstance cleanup. Called from EXACTLY
+// one place per game-over flow (broadcastGameOver in index.ts) and defensively
+// at the start of `game:start` to overwrite any stale entry. Direct calls
+// elsewhere risk duplicate deletes and inconsistent state transitions.
+export function clearGameInstance(roomId: string, GAMES: Map<string, unknown>): boolean {
+  return GAMES.delete(roomId);
+}
+
 export function getRoom(roomId: string): Room | undefined {
   return ROOMS.get(roomId);
 }
