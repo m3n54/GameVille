@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Socket } from 'socket.io-client';
 import { motion, AnimatePresence } from 'framer-motion';
 import HangmanDrawing from './HangmanDrawing';
@@ -30,7 +30,18 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
   // Server state projection has no playerOrder — track whose turn via events
   const [currentPlayerId, setCurrentPlayerId] = useState<string | null>(null);
   const [language, setLanguage] = useState<Lang>('id');
+  // H6: tracked timers so unmount clears them (no setState-on-unmount warnings).
+  const timersRef = useRef<Set<number>>(new Set());
   const myId = socket.id;
+
+  // H6: clear all pending timers on unmount.
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      timers.forEach(clearTimeout);
+      timers.clear();
+    };
+  }, []);
 
   const sendConfig = useCallback(() => {
     socket.emit('game:action', { type: 'config', payload: { language } });
@@ -74,10 +85,18 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
         setCurrentPlayerId(action.firstTurn ?? null);
       } else if (action.type === 'correctGuess' && action.letter) {
         setFlashLetter({ letter: action.letter, ok: true });
-        window.setTimeout(() => setFlashLetter(null), 700);
+        const id = window.setTimeout(() => {
+          setFlashLetter(null);
+          timersRef.current.delete(id);
+        }, 700);
+        timersRef.current.add(id);
       } else if (action.type === 'wrongGuess' && action.letter) {
         setFlashLetter({ letter: action.letter, ok: false });
-        window.setTimeout(() => setFlashLetter(null), 700);
+        const id = window.setTimeout(() => {
+          setFlashLetter(null);
+          timersRef.current.delete(id);
+        }, 700);
+        timersRef.current.add(id);
       }
     };
 
