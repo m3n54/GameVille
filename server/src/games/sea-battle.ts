@@ -127,6 +127,16 @@ export class SeaBattleEngine extends BaseGame {
       if (state.ships1.length > 0 && state.ships2.length > 0) {
         state.phase = 'playing';
         events.push({ type: 'gameStart', data: { firstTurn: state.currentTurn } });
+      } else if (state.phase === 'setup') {
+        // One fleet placed, the other still needs to. Send a turn hint so
+        // the waiting player's UI can prompt them. Informational only —
+        // autoPlace doesn't strictly require a "turn" since any player can
+        // place at any time during setup, but this lets the client surface
+        // a clear "Giliranmu: tempatkan kapal" indicator (see plan #4).
+        const waiting = state.player1Id === playerId ? state.player2Id : state.player1Id;
+        if (waiting) {
+          events.push({ type: 'turnChange', data: { playerId: waiting } });
+        }
       }
 
       return { newState: { ...state }, events };
@@ -247,9 +257,18 @@ function countSunk(ships: Ship[]): number {
 }
 
 export function seaBattleView(state: SeaBattleState, forPlayerId?: string): SeaBattlePlayerView {
-  // Game finished → full reveal is safe; otherwise default to player 1's view.
+  // Game finished → full reveal is safe for everyone.
   const revealAll = state.winner != null;
-  const asPlayer1 = revealAll || forPlayerId == null || forPlayerId === state.player1Id;
+  // Anti-cheat: every caller MUST identify which player they are projecting
+  // for. The previous default (asPlayer1 = forPlayerId == null) silently
+  // leaked player1's ship positions to every receiver — breaking ship
+  // placement UX and being a literal cheat. Throw loudly so any future
+  // call site that forgets to pass forPlayerId fails visibly instead of
+  // shipping a bug.
+  if (forPlayerId == null && !revealAll) {
+    throw new Error('seaBattleView: forPlayerId is required (anti-cheat projection)');
+  }
+  const asPlayer1 = revealAll || forPlayerId === state.player1Id;
   const myGrid = asPlayer1 ? state.grid1 : state.grid2;
   const enemyGrid = asPlayer1 ? state.grid2 : state.grid1;
   const myShips = asPlayer1 ? state.ships1 : state.ships2;
@@ -266,5 +285,8 @@ export function seaBattleView(state: SeaBattleState, forPlayerId?: string): SeaB
     enemyGrid: revealAll ? enemyGrid.map(row => [...row]) : stripShips(enemyGrid),
     myShips: myShips.map(s => ({ ...s, cells: s.cells.map(c => [...c] as [number, number]) })),
     enemySunkShips: countSunk(enemyShips),
+    // Opponent fleet size (0 while they haven't placed, 5 once setup is done).
+    // Lets the client know "lawan sudah place" without leaking positions.
+    enemyShipsPlaced: enemyShips.length,
   };
 }

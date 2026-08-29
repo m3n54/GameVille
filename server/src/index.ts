@@ -303,8 +303,12 @@ io.on('connection', (socket) => {
     // Process all events
     try {
       for (const event of result.events) {
+      const isSeaBattle = instance.gameType === 'sea-battle';
       switch (event.type) {
         case 'diceResult':
+          // Snakes-Ladders: state is the same for every viewer (no anti-cheat
+          // projection needed — players[] + currentTurn is shared). Stick
+          // with the io.to(room) broadcast.
           io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
           io.to(instance.roomId).emit('game:action', event.data);
           break;
@@ -313,7 +317,13 @@ io.on('connection', (socket) => {
         case 'correctGuess':
         case 'wrongGuess':
         case 'turnChange':
-          io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
+          // Sea-battle: per-player projection required (anti-cheat). Other
+          // games: shared state, io.to() broadcast is fine.
+          if (isSeaBattle) {
+            broadcastPerPlayerState(io, instance);
+          } else {
+            io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
+          }
           io.to(instance.roomId).emit('game:action',
             event.type === 'turnChange' ? { type: 'turn', ...event.data } : { type: event.type, ...event.data });
           break;
@@ -328,20 +338,18 @@ io.on('connection', (socket) => {
           // io.to() broadcast sent the shooter's projection to everyone
           // and the socket.to() fallback used no forPlayerId, which made
           // the non-shooter always see player1's perspective.
-          const room = getRoom(instance.roomId);
-          if (room) {
-            for (const player of room.players) {
-              const projection = stateForClient(instance.gameType, instance.state, player.id);
-              io.to(player.id).emit('game:state', projection);
-            }
-          }
+          broadcastPerPlayerState(io, instance);
           // The shooter also gets the fireResult event for hit/miss feedback
           socket.emit('game:action', { type: 'fireResult', ...event.data });
           break;
         }
         case 'gameStart': {
           // Minesweeper config uses firstTurnId; sea battle uses firstTurn
-          io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
+          if (isSeaBattle) {
+            broadcastPerPlayerState(io, instance);
+          } else {
+            io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
+          }
           io.to(instance.roomId).emit('game:action', { type: 'gameStart', ...event.data });
           const firstTurn = (event.data.firstTurn ?? event.data.firstTurnId) as string | undefined;
           if (firstTurn) {
@@ -350,7 +358,12 @@ io.on('connection', (socket) => {
           break;
         }
         case 'shipsPlaced':
-          io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
+          // Sea-battle MUST use per-player projection — the shared-state
+          // default leaks player1's ship positions as player2's "myShips"
+          // and breaks the auto-place button (player2 sees myShips already
+          // filled, button stays disabled). For other games this event is
+          // never emitted today, but the helper handles either case safely.
+          broadcastPerPlayerState(io, instance);
           break;
         case 'error':
           socket.emit('room:error', event.data as { message: string });
@@ -416,6 +429,22 @@ io.on('connection', (socket) => {
 // Sea-battle needs per-player projections even within one broadcast tick:
 // the shooter sees the hit result immediately, the rest see the plain board.
 type IOServer = Server<ClientToServerEvents, ServerToClientEvents>;
+
+// Per-player state broadcast. Sea-Battle projection strips opponent ship
+// markers — every receiver MUST get a stateForClient call keyed to THEIR
+// OWN forPlayerId. The old `io.to(room).emit(stateForClient(...))` pattern
+// silently defaulted to player1's view for everyone, which is a cheat
+// (and broke ship placement UX — see plan bug #1: shipsPlaced broadcast
+// leaked player1's ship positions as player2's "myShips", disabling the
+// "Tempatkan Kapal" button for player2).
+function broadcastPerPlayerState(io: IOServer, instance: NonNullable<ReturnType<typeof findGameForSocket>>): void {
+  const room = getRoom(instance.roomId);
+  if (!room) return;
+  for (const player of room.players) {
+    const projection = stateForClient(instance.gameType, instance.state, player.id);
+    io.to(player.id).emit('game:state', projection);
+  }
+}
 
 function broadcastGameOver(io: IOServer, instance: ReturnType<typeof findGameForSocket> & object, winnerId: string): void {
   if (!instance) return;
