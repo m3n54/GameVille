@@ -120,8 +120,12 @@ export class HangmanEngine extends BaseGame {
           data: { letter, correctLetters: [...state.correctLetters] },
         });
 
-        // Check win: every letter revealed
-        if (state.correctLetters.every(l => l !== null)) {
+        // M3: apostrophe/hyphen-safe win check — strip non-letters from the
+        // word and verify each unique letter has been guessed.
+        const winWord = state.word.toUpperCase().replace(/[^A-Z]/g, '');
+        const guessedSet = new Set(state.guessedLetters);
+        const allLettersGuessed = winWord.length > 0 && [...winWord].every(c => guessedSet.has(c));
+        if (allLettersGuessed) {
           state.winner = 'team';
           events.push({ type: 'gameOver', data: { winnerId: 'team', word: state.word, won: true } });
           return { newState: { ...state }, events };
@@ -168,8 +172,17 @@ export class HangmanEngine extends BaseGame {
     const next = [...state.playerOrder];
     next.splice(idx, 1);
     if (next.length === 0) {
-      // No players left; engine will be deleted by the caller.
+      // C3: no players left — co-op loss, no winner.
       state.playerOrder = next;
+      state.winner = 'none';
+      return { playerOrder: next, gameOver: true };
+    }
+    if (next.length === 1 && state.playerOrder.length === 2) {
+      // C3: 1v1 hangman → survivor wins by forfeit. Co-op hangman with 2→1
+      // forfeits are rare but consistent: team wins because the sole remaining
+      // player completed the round by being the last one standing.
+      state.playerOrder = next;
+      state.winner = 'team';
       return { playerOrder: next, gameOver: true };
     }
     if (state.currentTurn > idx) {
