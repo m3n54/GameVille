@@ -51,7 +51,16 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
   // Guard against win SFX replay on tab remount (isMyWin is true on first render
   // after refresh of a finished game; we want it to fire once per actual win).
   const hasPlayedWinRef = useRef(false);
+  // H3: ref to current players list so the diceResult handler can read the
+  // pre-roll position without depending on gameState.players (which re-binds
+  // the listener on every broadcast = 60+ cycles per game).
+  const playersRef = useRef<SnakesLaddersState['players']>([]);
   const myId = socket.id;
+
+  // Keep playersRef in sync with latest state — read by handleAction on dice events.
+  useEffect(() => {
+    playersRef.current = gameState?.players ?? [];
+  }, [gameState?.players]);
 
   useEffect(() => {
     if (!socket) return;
@@ -91,7 +100,7 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
         // Compute and store the full traversal segments for the rolling player so
         // Board2D can animate hop-by-hop through the snake head/tail (or ladder
         // bottom/top) instead of jumping pre-snake to post-snake in one step.
-        const from = (gameState?.players ?? []).find((p) => p.id === action.playerId)?.position ?? 0;
+        const from = (playersRef.current ?? []).find((p) => p.id === action.playerId)?.position ?? 0;
         setSegments((prev) => ({
           ...prev,
           [action.playerId]: buildSegments(from, action.newPosition, action.snakeHit, action.ladderHit),
@@ -111,7 +120,7 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
       socket.off('game:action', handleAction);
       if (glowTimerRef.current) clearTimeout(glowTimerRef.current);
     };
-  }, [socket, myId, gameState?.players]);
+  }, [socket, myId]);
 
   // Confetti + win SFX fire on game over. The ref ensures a single fire per
   // actual win — refreshing the tab after winning would otherwise replay the
