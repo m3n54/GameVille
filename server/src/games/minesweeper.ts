@@ -8,8 +8,14 @@ const DIFFICULTY_CONFIG: Record<MinesweeperDifficulty, [number, number, number]>
   ekstrem: [14, 14, 40],
 };
 
-// Extended internal state — grid is NOT generated until the config action arrives.
-export type MinesweeperExtendedState = MinesweeperState & { phase: 'config' | 'playing' };
+// Extended internal state — grid is NOT generated until the first reveal
+// (C6 first-click safety). `grid: null` means "no board yet" (config phase or
+// fresh game-start before any reveal).
+export type MinesweeperExtendedState = Omit<MinesweeperState, 'grid'> & {
+  phase: 'config' | 'playing';
+  grid: Cell[][] | null;
+  firstClick: { row: number; col: number } | null;
+};
 
 export class MinesweeperEngine extends BaseGame {
   gameType: GameType = 'minesweeper';
@@ -21,7 +27,11 @@ export class MinesweeperEngine extends BaseGame {
       rows: 10,
       cols: 10,
       bombCount: 15,
-      grid: [],
+      // C6: first-click safety — grid is generated lazily on the first reveal,
+      // with bombs excluded from the 3x3 around the click. Initialized as null
+      // so a stale 'config'/'playing' state with no grid is detectable.
+      grid: null,
+      firstClick: null,
       revealedSafeCount: 0,
       totalSafeCells: 0,
       currentTurn: 0,
@@ -57,7 +67,8 @@ export class MinesweeperEngine extends BaseGame {
       state.rows = rows;
       state.cols = cols;
       state.bombCount = bombCount;
-      generateGrid(state);
+      // C6: defer grid generation to the first reveal so the first click is
+      // guaranteed safe (3x3 around the click is bomb-free).
       state.phase = 'playing';
 
       events.push({ type: 'gameStart', data: { firstTurnId: state.playerOrder[0] } });
@@ -83,11 +94,24 @@ export class MinesweeperEngine extends BaseGame {
         return { newState: state, events: [{ type: 'error', data: { message: 'Koordinat tidak valid!' } }] };
       }
 
-      const cell = state.grid[row]?.[col];
+      // C6: lazy grid generation on first reveal — guarantees the first
+      // clicked cell (and its 3x3 neighborhood) contains no bomb.
+      if (state.grid === null) {
+        generateGrid(state, row, col);
+        state.firstClick = { row, col };
+      }
+      // After generateGrid, state.grid is non-null — but TS can't narrow
+      // mutation through a function call, so assert explicitly.
+      const grid = state.grid!;
+      const cell = grid[row]?.[col];
       if (!cell) {
         return { newState: state, events: [{ type: 'error', data: { message: 'Koordinat tidak valid!' } }] };
       }
-      if (cell.state === 'revealed') return { newState: state, events: [] }; // silent no-op
+      // H7: surface a clear error instead of silently dropping the action —
+      // the acting client must know why nothing happened.
+      if (cell.state === 'revealed') {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Cell sudah dibuka' } }] };
+      }
       if (cell.state === 'flagged') {
         return { newState: state, events: [{ type: 'error', data: { message: 'Lepas bendera dulu!' } }] };
       }
@@ -100,7 +124,7 @@ export class MinesweeperEngine extends BaseGame {
         changedCells.push({ row, col, state: 'revealed', adjacent: cell.adjacent, exploded: true });
         for (let r = 0; r < state.rows; r++) {
           for (let c = 0; c < state.cols; c++) {
-            const cb = state.grid[r]?.[c];
+            const cb = grid[r]?.[c];
             if (!cb) continue;
             if ((r !== row || c !== col) && cb.hasBomb && cb.state !== 'revealed') {
               cb.state = 'revealed';
@@ -156,11 +180,20 @@ export class MinesweeperEngine extends BaseGame {
         return { newState: state, events: [{ type: 'error', data: { message: 'Koordinat tidak valid!' } }] };
       }
 
+      // C6: toggleFlag should never generate the grid — only reveal does. If
+      // the player hasn't revealed anything yet, the grid is still null.
+      if (state.grid === null) {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Buka cell dulu sebelum menandai' } }] };
+      }
+
       const cell = state.grid[row]?.[col];
       if (!cell) {
         return { newState: state, events: [{ type: 'error', data: { message: 'Koordinat tidak valid!' } }] };
       }
-      if (cell.state === 'revealed') return { newState: state, events: [] }; // silent no-op
+      // H7: same surfaced error as reveal.
+      if (cell.state === 'revealed') {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Cell sudah dibuka' } }] };
+      }
 
       cell.state = cell.state === 'flagged' ? 'hidden' : 'flagged';
       events.push({ type: 'flagToggled', data: { row, col, state: cell.state } });
@@ -232,7 +265,14 @@ function endTurn(state: MinesweeperExtendedState, events: GameEvent[]): void {
 
 // === Grid generation ===
 
-function generateGrid(state: MinesweeperExtendedState): void {
+function generateGrid(state: MinesweeperExtendedState, safeRow: number, safeCol: number): void {
+  // C6: first-click safety — the clicked cell and its 3x3 neighborhood must
+  // never contain a bomb. We also need at least 1 free cell for the first
+  // click itself, so cap bombCount to (rows*cols - 9) and reserve the 3x3.
+  if (state.bombCount > state.rows * state.cols - 9) {
+    state.bombCount = Math.max(0, state.rows * state.cols - 9);
+  }
+
   // Empty grid
   state.grid = [];
   for (let r = 0; r < state.rows; r++) {
@@ -243,11 +283,28 @@ function generateGrid(state: MinesweeperExtendedState): void {
     state.grid.push(row);
   }
 
-  // Random bomb placement
+  // Mark the 3x3 safe zone (centered on the first click).
+  const safe = new Set<string>();
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      const r = safeRow + dr;
+      const c = safeCol + dc;
+      if (r >= 0 && r < state.rows && c >= 0 && c < state.cols) {
+        safe.add(`${r},${c}`);
+      }
+    }
+  }
+
+  // Random bomb placement — skip the safe zone.
   let placed = 0;
-  while (placed < state.bombCount) {
+  let attempts = 0;
+  // Bound attempts to prevent infinite loop on degenerate configs.
+  const maxAttempts = state.rows * state.cols * 10;
+  while (placed < state.bombCount && attempts < maxAttempts) {
+    attempts++;
     const r = Math.floor(Math.random() * state.rows);
     const c = Math.floor(Math.random() * state.cols);
+    if (safe.has(`${r},${c}`)) continue;
     const cell = state.grid[r]?.[c];
     if (!cell || cell.hasBomb) continue;
     cell.hasBomb = true;
@@ -267,13 +324,16 @@ function generateGrid(state: MinesweeperExtendedState): void {
 }
 
 function countAdjacent(state: MinesweeperExtendedState, row: number, col: number): number {
+  // countAdjacent is only called from generateGrid (which just built the grid)
+  // and from revealCascade (only after the lazy init). Non-null assert is safe.
+  const grid = state.grid!;
   let count = 0;
   for (let dr = -1; dr <= 1; dr++) {
     for (let dc = -1; dc <= 1; dc++) {
       if (dr === 0 && dc === 0) continue;
       const r = row + dr;
       const c = col + dc;
-      const cell = state.grid[r]?.[c];
+      const cell = grid[r]?.[c];
       if (r >= 0 && r < state.rows && c >= 0 && c < state.cols && cell?.hasBomb) {
         count++;
       }
@@ -290,6 +350,8 @@ function revealCascade(
   startCol: number,
   changedCells: { row: number; col: number; state: Cell['state']; adjacent: number; exploded?: boolean }[],
 ): void {
+  // Only called after lazy init in handleAction('reveal') — non-null assert OK.
+  const grid = state.grid!;
   const queue: [number, number][] = [[startRow, startCol]];
   const visited = new Set<string>();
 
@@ -299,7 +361,7 @@ function revealCascade(
     if (visited.has(key)) continue;
     visited.add(key);
 
-    const cell = state.grid[r]?.[c];
+    const cell = grid[r]?.[c];
     if (!cell) continue;
     if (cell.state === 'revealed' || cell.state === 'flagged' || cell.hasBomb) continue;
 
@@ -327,6 +389,23 @@ function revealCascade(
 
 export function toView(state: MinesweeperExtendedState): MinesweeperView {
   const gameOver = state.winner != null;
+  // C6: grid is null between config and the first reveal — emit a fully-hidden
+  // placeholder so the client renders an empty board (no crash on .map).
+  if (state.grid === null) {
+    return {
+      difficulty: state.difficulty,
+      mode: state.mode,
+      phase: state.phase,
+      rows: state.rows,
+      cols: state.cols,
+      bombCount: state.bombCount,
+      cells: [],
+      flagsUsed: 0,
+      currentTurn: state.currentTurn,
+      chainActive: state.chainActive,
+      winner: state.winner,
+    };
+  }
   const cells = state.grid.map(row =>
     row.map(cell => {
       if (cell.state === 'revealed') {
