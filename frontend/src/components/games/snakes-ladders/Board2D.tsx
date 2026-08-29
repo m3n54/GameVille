@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import SnakeSVG from './SnakeSVG';
 import LadderSVG from './LadderSVG';
 import PawnSVG from './PawnSVG';
-import { tileToGridPos, GRID_SIZE, tileColor } from './boardUtils';
+import { tileToGridPos, tileCenter, GRID_SIZE, tileColor } from './boardUtils';
 import { usePawnAnim } from './usePawnAnim';
 
 interface PlayerState {
@@ -151,9 +151,9 @@ export default function Board2D({
         {glowTile && (
           <motion.circle
             key={`g-${glowTile.tile}-${glowTile.kind}`}
-            cx={tileToGridPos(glowTile.tile).col + 0.5}
-            cy={tileToGridPos(glowTile.tile).row + 0.5}
-            r="0.8"
+            cx={tileCenter(glowTile.tile).x}
+            cy={tileCenter(glowTile.tile).y}
+            r="0.5"
             fill={glowTile.kind === 'snake' ? '#FF6B6B' : '#FFE66D'}
             initial={{ opacity: 0.6, scale: 0.5 }}
             animate={{ opacity: 0, scale: 2.2 }}
