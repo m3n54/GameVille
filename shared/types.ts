@@ -144,6 +144,10 @@ export interface SeaBattlePlayerView {
   enemyGrid: string[][];        // 'S' replaced with ' '
   myShips: Ship[];
   enemySunkShips: number;        // count of fully-sunk enemy ships (for HUD)
+  // Count of opponent's placed ships. Used by the client to detect when the
+  // other player has finished setup (and to drive the "Tempatkan Kapal"
+  // button enable/disable state without exposing opponent ship positions).
+  enemyShipsPlaced: number;
 }
 
 // === Minesweeper (co-op) ===

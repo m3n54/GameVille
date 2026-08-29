@@ -51,6 +51,7 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
     const handleAction = (data: unknown) => {
       const action = data as {
         type: string;
+        playerId?: string;
         nextPlayerId?: string;
         row?: number;
         col?: number;
@@ -84,6 +85,23 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
 
       if (action.type === 'gameStart') {
         setMessage('Game dimulai! Giliran pertama! 🚀');
+      }
+
+      // Setup-phase prompt: tells the waiting player their opponent just
+      // finished placing and it's their turn to place. Without this, the
+      // anti-cheat projection (myShips: [] for the player who hasn't
+      // placed yet) leaves no signal that they still need to act.
+      if (action.type === 'shipsPlaced') {
+        if (action.playerId === myId) {
+          setMessage('Kapalmu sudah ditempatkan! Menunggu lawan...');
+        } else {
+          setMessage('Lawan sudah menempatkan kapal. Saatnya kamu! 🚢');
+        }
+        const id = window.setTimeout(() => {
+          setMessage('');
+          timersRef.current.delete(id);
+        }, 3000);
+        timersRef.current.add(id);
       }
     };
 
@@ -121,6 +139,16 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
   const isSetup = gameState.phase === 'setup';
   const isOver = gameState.phase === 'finished';
   const myShipsPlaced = myShips.length > 0;
+  // Setup-turn indicator: highlights "your turn to place" when both
+  // conditions hold — game is in setup, and the engine's currentTurn
+  // points at us. Sea-battle keeps state.currentTurn = player1 throughout
+  // setup (no per-tick rotation), so this lights up for player1 from
+  // the start and switches to player2 once player1 finishes. Both can
+  // still click the button any time during setup; this is purely UX.
+  const isMySetupTurn = isSetup && isMyTurn;
+  // Opponent has placed when their side has any ships. Used to render a
+  // confirmation hint so player2 knows they're racing player1, not alone.
+  const enemyShipsPlaced = gameState.enemyShipsPlaced ?? 0;
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -144,10 +172,20 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
 
       {/* Setup phase: auto-place button */}
       {isSetup && (
-        <div className="text-center">
+        <div className="text-center space-y-2">
           <Button onClick={autoPlace} disabled={myShipsPlaced}>
             {myShipsPlaced ? '✅ Kapal sudah ditempatkan' : '🚢 Tempatkan Kapal (Auto)'}
           </Button>
+          {isMySetupTurn && !myShipsPlaced && (
+            <p className="text-sm font-semibold text-cute-primary">
+              ⏳ Giliranmu: tempatkan kapalmu!
+            </p>
+          )}
+          {enemyShipsPlaced > 0 && !myShipsPlaced && (
+            <p className="text-xs text-cute-muted">
+              Lawan sudah menempatkan {enemyShipsPlaced} kapal.
+            </p>
+          )}
         </div>
       )}
 
