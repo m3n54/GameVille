@@ -2,16 +2,26 @@
 
 import { motion } from 'framer-motion';
 
+export type PawnPhase = 'idle' | 'walking' | 'sliding';
+
 interface PawnSVGProps {
   color: string;
   size?: number; // px, default 44
   bounce?: boolean; // idle bounce animation
+  phase?: PawnPhase; // animation phase from usePawnAnim — suppresses bob during slide
 }
 
-export default function PawnSVG({ color, size = 44, bounce = true }: PawnSVGProps) {
+function bobForPhase(phase: PawnPhase | undefined, bounce: boolean): { y: number | number[] } {
+  if (!bounce) return { y: 0 };
+  if (phase === 'sliding') return { y: 0 };
+  if (phase === 'walking') return { y: [0, -2, 0] };
+  return { y: [0, -3, 0] };
+}
+
+export default function PawnSVG({ color, size = 44, bounce = true, phase = 'idle' }: PawnSVGProps) {
   return (
     <motion.div
-      animate={bounce ? { y: [0, -3, 0] } : { y: 0 }}
+      animate={bobForPhase(phase, bounce)}
       transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
       style={{ width: size, height: size }}
     >

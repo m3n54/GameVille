@@ -73,7 +73,7 @@ function PawnLayer({
         zIndex: 20,
       }}
     >
-      <PawnSVG color={p.color} />
+      <PawnSVG color={p.color} phase={display.phase} />
     </div>
   );
 }
@@ -96,6 +96,12 @@ export default function Board2D({
     [snakes, ladders],
   );
 
+  // Z-stack contract (T5):
+  // z=0..4: free for future background layers
+  // z=5: SVG overlay (snakes/ladders/glow) — must be UNDER tile numbers
+  // z=10: tile grid (numbers visible)
+  // z=20: pawns
+  // z=30+: free for future foreground layers (e.g. tooltips)
   return (
     <div
       className="relative w-full max-w-[420px] mx-auto bg-white rounded-cute shadow-soft overflow-hidden"
@@ -109,6 +115,7 @@ export default function Board2D({
           gridTemplateRows: `repeat(${GRID_SIZE}, 1fr)`,
           gap: '2px',
           padding: '2px',
+          zIndex: 10,
         }}
       >
         {Array.from({ length: 100 }, (_, i) => {
@@ -132,7 +139,7 @@ export default function Board2D({
         className="absolute inset-0 pointer-events-none"
         viewBox={`0 0 ${GRID_SIZE} ${GRID_SIZE}`}
         preserveAspectRatio="none"
-        style={{ zIndex: 10 }}
+        style={{ zIndex: 5 }}
       >
         {snakes.map(([head, tail], i) => (
           <SnakeSVG key={`s-${i}`} headTile={head} tailTile={tail} />
