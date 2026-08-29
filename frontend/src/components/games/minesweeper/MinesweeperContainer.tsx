@@ -40,6 +40,12 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
   const { isMyTurn } = useGameTurn(socket, socket.id ?? null);
   const [difficulty, setDifficulty] = useState<MinesweeperDifficulty>('sedang');
   const [mode, setMode] = useState<MinesweeperMode>('santai');
+  // Bomb-count config (Step 3): 3-button segmented + conditional inputs.
+  const [bombMode, setBombMode] = useState<'fixed' | 'random' | 'custom'>('fixed');
+  const [bombRange, setBombRange] = useState<{ min: number; max: number }>({ min: 9, max: 30 });
+  const [customBombCount, setCustomBombCount] = useState(15);
+  // Tap-to-choose modal (Steps 4-5): mobile-friendly reveal/flag picker.
+  const [tapCell, setTapCell] = useState<{ row: number; col: number } | null>(null);
   // H6: tracked timers so unmount clears them (no setState-on-unmount warnings).
   const timersRef = useRef<Set<number>>(new Set());
 
@@ -128,8 +134,39 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
   );
 
   const handleConfig = useCallback(() => {
-    sendAction({ type: 'config', payload: { difficulty, mode } });
-  }, [sendAction, difficulty, mode]);
+    sendAction({
+      type: 'config',
+      payload: { difficulty, mode, bombMode, bombRange, customBombCount },
+    });
+  }, [sendAction, difficulty, mode, bombMode, bombRange, customBombCount]);
+
+  // Steps 4-5: tap-to-choose modal handlers.
+  // Grid calls onCellTap for any left-click on a non-revealed cell while
+  // it's the player's turn. We open a modal letting them pick reveal vs
+  // flag — mobile-friendly replacement for the desktop right-click flow.
+  const onCellTap = useCallback(
+    (row: number, col: number) => {
+      if (!isMyTurn) return;
+      if (!view || view.phase !== 'playing') return;
+      const cell = view.cells?.[row]?.[col];
+      if (!cell || cell.state === 'revealed') return;
+      setTapCell({ row, col });
+    },
+    [isMyTurn, view],
+  );
+
+  const handleTapChoice = useCallback(
+    (choice: 'reveal' | 'flag') => {
+      if (!tapCell) return;
+      if (choice === 'reveal') {
+        sendAction({ type: 'reveal', payload: { row: tapCell.row, col: tapCell.col } });
+      } else {
+        sendAction({ type: 'toggleFlag', payload: { row: tapCell.row, col: tapCell.col } });
+      }
+      setTapCell(null);
+    },
+    [tapCell, sendAction],
+  );
 
   // === Config phase — server starts in phase 'config' with empty cells ===
   if (!view || view.phase === 'config' || !view.cells || view.cells.length === 0) {
@@ -175,6 +212,74 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
               <span className="text-xs text-cute-muted">{m.detail}</span>
             </button>
           ))}
+        </div>
+
+        {/* Bomb count — 3-button segmented + conditional inputs */}
+        <div className="space-y-2 text-left">
+          <p className="text-sm font-bold text-cute-text">Jumlah Bom</p>
+          <div className="grid grid-cols-3 gap-2">
+            {(
+              [
+                { value: 'fixed', label: 'Tetap' },
+                { value: 'random', label: 'Acak' },
+                { value: 'custom', label: 'Kustom' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setBombMode(opt.value)}
+                className={`px-3 py-2 rounded-xl border-2 text-sm font-bold transition-all ${
+                  bombMode === opt.value
+                    ? 'border-primary bg-pink-50 text-cute-text shadow-soft'
+                    : 'border-pink-100 bg-white text-cute-muted hover:border-primary'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          {bombMode === 'random' && (
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <label className="text-xs text-cute-muted">
+                Min
+                <input
+                  type="number"
+                  min={9}
+                  value={bombRange.min}
+                  onChange={(e) =>
+                    setBombRange((r) => ({ ...r, min: Number(e.target.value) || 0 }))
+                  }
+                  className="mt-1 w-full px-3 py-2 bg-white border-2 border-pink-200 rounded-cute text-cute-text focus:outline-none focus:border-primary"
+                />
+              </label>
+              <label className="text-xs text-cute-muted">
+                Max
+                <input
+                  type="number"
+                  min={9}
+                  value={bombRange.max}
+                  onChange={(e) =>
+                    setBombRange((r) => ({ ...r, max: Number(e.target.value) || 0 }))
+                  }
+                  className="mt-1 w-full px-3 py-2 bg-white border-2 border-pink-200 rounded-cute text-cute-text focus:outline-none focus:border-primary"
+                />
+              </label>
+            </div>
+          )}
+
+          {bombMode === 'custom' && (
+            <label className="block text-xs text-cute-muted pt-1">
+              Jumlah
+              <input
+                type="number"
+                min={9}
+                value={customBombCount}
+                onChange={(e) => setCustomBombCount(Number(e.target.value) || 0)}
+                className="mt-1 w-full px-3 py-2 bg-white border-2 border-pink-200 rounded-cute text-cute-text focus:outline-none focus:border-primary"
+              />
+            </label>
+          )}
         </div>
 
         <motion.button
@@ -244,10 +349,56 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
         <MinesweeperGrid
           view={view}
           myTurn={isMyTurn}
+          onCellTap={onCellTap}
           onReveal={handleReveal}
           onToggleFlag={handleToggleFlag}
         />
       </div>
+
+      {/* Tap-to-choose modal (mobile-friendly flag/reveal picker) */}
+      <AnimatePresence>
+        {tapCell && (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+            onClick={() => setTapCell(null)}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              className="bg-white rounded-2xl p-6 shadow-2xl max-w-sm mx-4 w-full"
+              onClick={(e) => e.stopPropagation()}
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+            >
+              <h3 className="font-bold text-lg mb-4 text-center text-cute-text">
+                Kotak ({tapCell.row + 1}, {tapCell.col + 1})
+              </h3>
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={() => handleTapChoice('reveal')}
+                  className="w-full bg-primary text-white font-bold py-3 rounded-xl shadow-soft hover:bg-pink-400 active:bg-pink-500 transition-all"
+                >
+                  ⛏️ Buka Kotak
+                </button>
+                <button
+                  onClick={() => handleTapChoice('flag')}
+                  className="w-full bg-secondary text-white font-bold py-3 rounded-xl shadow-soft hover:bg-blue-300 active:bg-blue-400 transition-all"
+                >
+                  🚩 Tandai Bendera
+                </button>
+                <button
+                  onClick={() => setTapCell(null)}
+                  className="w-full bg-transparent text-cute-text font-bold py-2 rounded-xl hover:bg-pink-50 transition-all"
+                >
+                  Batal
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <p className="text-center text-xs text-cute-muted">
         Klik kiri buka · Klik kanan bendera
