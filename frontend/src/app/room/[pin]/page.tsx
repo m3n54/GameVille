@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { useSocket } from '@/hooks/useSocket';
@@ -159,6 +159,15 @@ export default function RoomPage() {
   const me = players.find(p => p.id === myId);
   const myNickname = me?.nickname ?? '';
 
+  // R5-2: leaveRoom clears the room store but the F9 grace timer gates on
+  // everHadRoomRef (set true on first successful sync) to avoid flashing the
+  // join form over a re-syncing member. After an explicit leave we want F9
+  // to fire so the user can re-join from the same URL — reset the ref here.
+  const handleLeave = useCallback(() => {
+    everHadRoomRef.current = false;
+    leaveRoom();
+  }, [leaveRoom]);
+
   if (!connected || !room || !myId) {
     // F9: paste-URL flow — show the join form instead of redirecting away.
     if (showJoinForm) {
@@ -210,7 +219,7 @@ export default function RoomPage() {
           <GameErrorBanner message={error} onDismiss={clearError} />
           <ChatBox socket={socket!} myNickname={myNickname} myId={myId} />
           <EmojiReactions socket={socket!} />
-          <Button variant="ghost" onClick={() => { setGameActive(false); leaveRoom(); }}>
+          <Button variant="ghost" onClick={() => { setGameActive(false); handleLeave(); }}>
             ← Keluar
           </Button>
         </div>
@@ -248,7 +257,7 @@ export default function RoomPage() {
                 <Button onClick={() => { setGameWinner(null); setGameActive(false); }} className="w-full">
                   🔄 Kembali ke Lobby
                 </Button>
-                <Button variant="ghost" onClick={leaveRoom} className="w-full">
+                <Button variant="ghost" onClick={handleLeave} className="w-full">
                   🚪 Keluar Ruang
                 </Button>
               </div>
@@ -332,7 +341,7 @@ export default function RoomPage() {
                     Host yang memulai game
                   </p>
                 )}
-                <Button variant="ghost" onClick={leaveRoom} className="w-full">
+                <Button variant="ghost" onClick={handleLeave} className="w-full">
                   🚪 Keluar Ruang
                 </Button>
               </div>
