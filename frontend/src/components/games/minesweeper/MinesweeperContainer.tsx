@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Socket } from 'socket.io-client';
 import { motion, AnimatePresence } from 'framer-motion';
 import MinesweeperGrid from './MinesweeperGrid';
+import { useGameTurn } from '@/hooks/useGameTurn';
 import type {
   MinesweeperView,
   MinesweeperDifficulty,
@@ -35,39 +36,39 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
     initial as MinesweeperView | null,
   );
   const [message, setMessage] = useState('');
-  // Turn tracking via useGameTurn — strict equality (FE-F3): unknown turn is
-  // NEVER "my turn". The old optimistic null made everyone see "Giliranmu!"
-  // before the first event.
-  const [currentPlayerId, setCurrentPlayerId] = useState<string | null>(null);
+  // C7: useGameTurn owns the listener + state — single source of truth across games.
+  const { isMyTurn } = useGameTurn(socket, socket.id ?? null);
   const [difficulty, setDifficulty] = useState<MinesweeperDifficulty>('sedang');
   const [mode, setMode] = useState<MinesweeperMode>('santai');
-  const myId = socket.id;
-  // F4: the action listener used to read `view?.winner` with it in the deps
-  // array — re-adding listeners on every winner flip (a drop window) while
-  // capturing a stale `view`. A ref keeps the handler stable instead.
-  const winnerRef = useRef<string | null>(null);
+  // H6: tracked timers so unmount clears them (no setState-on-unmount warnings).
+  const timersRef = useRef<Set<number>>(new Set());
 
+  // H6: clear all pending timers on unmount.
   useEffect(() => {
-    winnerRef.current = view?.winner ?? null;
-  }, [view?.winner]);
+    const timers = timersRef.current;
+    return () => {
+      timers.forEach(clearTimeout);
+      timers.clear();
+    };
+  }, []);
 
   useEffect(() => {
     if (!socket) return;
 
     const onAction = (data: unknown) => {
+      // C7: turn tracking is owned by useGameTurn. Only handle game-specific
+      // feedback (revealResult toast) here.
       const action = data as { type?: string; nextPlayerId?: string };
-      if (action.type === 'turn') setCurrentPlayerId(action.nextPlayerId ?? null);
-      if (action.type === 'gameStart') {
-        const g = data as { firstTurn?: string; firstTurnId?: string };
-        setCurrentPlayerId(g.firstTurn ?? g.firstTurnId ?? null);
-        if ((g.firstTurn ?? g.firstTurnId) === myId) setMessage('Giliranmu!');
-      }
       if (action.type === 'revealResult') {
         const r = data as { result?: string; cells?: unknown[] };
         if (r.result === 'safe') {
           const opened = r.cells?.length ?? 0;
           setMessage(`Aman! ${opened} kotak terbuka`);
-          window.setTimeout(() => setMessage(''), 2500);
+          const id = window.setTimeout(() => {
+            setMessage('');
+            timersRef.current.delete(id);
+          }, 2500);
+          timersRef.current.add(id);
         } else if (r.result === 'boom') {
           setMessage('💥 BOOM! Tim kalah');
         }
@@ -80,7 +81,7 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
     return () => {
       socket.off('game:action', onAction);
     };
-  }, [socket, myId]);
+  }, [socket]);
 
   // Sync server state — server sends the projected MinesweeperView
   useEffect(() => {
@@ -188,10 +189,8 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
     );
   }
 
-  // Strict turn check — unknown ≠ my turn (FE-F3)
-  const isMyTurn = currentPlayerId != null && currentPlayerId === myId;
+  // C7: isMyTurn now comes from useGameTurn (strict FE-F3 equality).
   const isOver = view.winner != null;
-  void winnerRef; // reserved for future stable-handler refactor
 
   return (
     <div className="max-w-3xl mx-auto space-y-4">
