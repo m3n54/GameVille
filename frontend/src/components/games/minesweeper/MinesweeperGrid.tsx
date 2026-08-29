@@ -7,6 +7,10 @@ interface MinesweeperGridProps {
   myTurn: boolean;
   onReveal: (row: number, col: number) => void;
   onToggleFlag: (row: number, col: number) => void;
+  // Mobile-friendly: when provided, left-click routes here instead of
+  // onReveal — caller opens a modal letting the user pick reveal/flag.
+  // Desktop users still get right-click via onContextMenu → onToggleFlag.
+  onCellTap?: (row: number, col: number) => void;
 }
 
 // Pastel digit colors per adjacent-bomb count
@@ -27,6 +31,7 @@ export default function MinesweeperGrid({
   myTurn,
   onReveal,
   onToggleFlag,
+  onCellTap,
 }: MinesweeperGridProps) {
   const gameOver = view.winner != null;
   const interactive = myTurn && !gameOver;
@@ -35,6 +40,10 @@ export default function MinesweeperGrid({
     if (!interactive) return;
     const cell = view.cells?.[row]?.[col];
     if (!cell || cell.state !== 'hidden') return;
+    if (onCellTap) {
+      onCellTap(row, col);
+      return;
+    }
     onReveal(row, col);
   };
 

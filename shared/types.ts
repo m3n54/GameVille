@@ -51,7 +51,17 @@ export type GameAction =
   | { type: 'fire' | 'reveal' | 'toggleFlag'; payload: { row: number; col: number } }
   | { type: 'autoPlace' }
   | { type: 'pass' }
-  | { type: 'config'; payload?: { language?: 'id' | 'en'; difficulty?: MinesweeperDifficulty; mode?: MinesweeperMode } };
+  | {
+      type: 'config';
+      payload?: {
+        language?: 'id' | 'en';
+        difficulty?: MinesweeperDifficulty;
+        mode?: MinesweeperMode;
+        bombMode?: 'fixed' | 'random' | 'custom';
+        bombRange?: { min: number; max: number };
+        customBombCount?: number;
+      };
+    };
 
 export interface ServerToClientEvents {
   'player:update': (players: Player[]) => void;
