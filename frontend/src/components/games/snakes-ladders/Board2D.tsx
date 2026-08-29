@@ -103,10 +103,10 @@ export default function Board2D({
     [snakes, ladders],
   );
 
-  // Z-stack contract (T5):
+  // Z-stack contract (T5 + R3):
   // z=0..4: free for future background layers
-  // z=5: SVG overlay (snakes/ladders/glow) — must be UNDER tile numbers
   // z=10: tile grid (numbers visible)
+  // z=15: SVG overlay (snakes/ladders/glow) — above tile numbers, below pawns
   // z=20: pawns
   // z=30+: free for future foreground layers (e.g. tooltips)
   return (
@@ -146,7 +146,7 @@ export default function Board2D({
         className="absolute inset-0 pointer-events-none"
         viewBox={`0 0 ${GRID_SIZE} ${GRID_SIZE}`}
         preserveAspectRatio="none"
-        style={{ zIndex: 5 }}
+        style={{ zIndex: 15 }}
       >
         {snakes.map(([head, tail], i) => (
           <SnakeSVG key={`s-${i}`} headTile={head} tailTile={tail} />
