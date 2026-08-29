@@ -69,6 +69,12 @@ function generateAutoPlacement(): { grid: string[][]; ships: Ship[] } {
       }
       attempts++;
     }
+    // M1: silent skip is dangerous — caller would have a partial fleet and
+    // the C1 guard would reject any fire. Throw so the handler can emit an
+    // explicit error event for the client.
+    if (!placed) {
+      throw new Error('Cannot place ship: board too crowded');
+    }
   }
 
   return { grid, ships };
@@ -99,16 +105,23 @@ export class SeaBattleEngine extends BaseGame {
     const events: GameEvent[] = [];
 
     if (action.type === 'autoPlace') {
-      if (playerId === state.player1Id && state.ships1.length === 0) {
-        const { grid, ships } = generateAutoPlacement();
-        state.grid1 = grid;
-        state.ships1 = ships;
-        events.push({ type: 'shipsPlaced', data: { playerId } });
-      } else if (playerId === state.player2Id && state.ships2.length === 0) {
-        const { grid, ships } = generateAutoPlacement();
-        state.grid2 = grid;
-        state.ships2 = ships;
-        events.push({ type: 'shipsPlaced', data: { playerId } });
+      // M1: wrap placement so a crowded-board throw becomes an error event
+      // for the client instead of crashing the engine.
+      try {
+        if (playerId === state.player1Id && state.ships1.length === 0) {
+          const { grid, ships } = generateAutoPlacement();
+          state.grid1 = grid;
+          state.ships1 = ships;
+          events.push({ type: 'shipsPlaced', data: { playerId } });
+        } else if (playerId === state.player2Id && state.ships2.length === 0) {
+          const { grid, ships } = generateAutoPlacement();
+          state.grid2 = grid;
+          state.ships2 = ships;
+          events.push({ type: 'shipsPlaced', data: { playerId } });
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Auto-placement failed';
+        return { newState: state, events: [{ type: 'error', data: { message } }] };
       }
 
       if (state.ships1.length > 0 && state.ships2.length > 0) {
@@ -136,6 +149,13 @@ export class SeaBattleEngine extends BaseGame {
         typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < 10;
       if (!validCoord(row) || !validCoord(col)) {
         return { newState: state, events: [{ type: 'error', data: { message: 'Koordinat tidak valid!' } }] };
+      }
+      // M2: assert playerId is one of the two registered players BEFORE the
+      // ternary — string-keyed indexing with an unknown id would silently
+      // return undefined for targetShips and trip the C1 guard anyway, but
+      // rejecting up front is clearer.
+      if (![state.player1Id, state.player2Id].includes(playerId)) {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Invalid player' } }] };
       }
       const targetGrid = playerId === state.player1Id ? 'grid2' : 'grid1';
       const targetShips = playerId === state.player1Id ? 'ships2' : 'ships1';
@@ -173,7 +193,13 @@ export class SeaBattleEngine extends BaseGame {
         data: { playerId, row, col, hit, sunkShip },
       });
 
-      const allSunk = state[targetShips].every(ship => ship.hits >= ship.cells.length);
+      const targetShipsArr = state[targetShips];
+      // C1: guard against empty fleet — Array.every returns true for [], which
+      // would give an instant win on the first shot if auto-placement failed.
+      if (targetShipsArr.length === 0) {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Fleet not ready' } }] };
+      }
+      const allSunk = targetShipsArr.every(ship => ship.hits >= ship.cells.length);
       if (allSunk) {
         state.winner = playerId;
         state.phase = 'finished';
@@ -191,7 +217,13 @@ export class SeaBattleEngine extends BaseGame {
   override removePlayer(state: SeaBattleState, playerId: string): { playerOrder: string[]; gameOver?: boolean } {
     if (state.winner || state.phase === 'finished') return { playerOrder: [] };
     const other = playerId === state.player1Id ? state.player2Id : state.player1Id;
-    state.winner = other;
+    if (other) {
+      // C2: return survivor's id per engine convention; 1v1 forfeit → survivor wins.
+      state.winner = other;
+      state.phase = 'finished';
+      return { playerOrder: [other], gameOver: true };
+    }
+    // Defensive: both players left (shouldn't happen in 1v1) — finish cleanly.
     state.phase = 'finished';
     return { playerOrder: [], gameOver: true };
   }
