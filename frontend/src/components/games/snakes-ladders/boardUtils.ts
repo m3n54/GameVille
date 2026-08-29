@@ -36,15 +36,16 @@ export function tileToGridPos(tile: number): { row: number; col: number } {
   };
 }
 
-const TILE_COLORS = [
-  '#FFF5F7', // cute bg
-  '#FFE4EC', // light pink
-];
+/** 4-color pastel palette for the 2D board checker. Single source of truth — the
+ *  Board2D component must use this rather than redeclaring its own. */
+export const TILE_PALETTE: readonly string[] = ['#FFF5F7', '#FFE4EC', '#E5F4FB', '#FFEFD8'];
 
-/** Alternating checker-style pastel for a tile index. */
+/** Alternating checker-style pastel for a tile index. Uses the 4-color palette
+ *  with boustrophedon-aware column flip so the pattern reads correctly in both
+ *  row directions. */
 export function tileColor(tile: number): string {
   const row = Math.floor(tile / GRID_SIZE);
   const colRaw = tile % GRID_SIZE;
   const col = row % 2 === 1 ? GRID_SIZE - 1 - colRaw : colRaw;
-  return TILE_COLORS[(row + col) % TILE_COLORS.length] ?? '#FFE4EC';
+  return TILE_PALETTE[(row + col) % TILE_PALETTE.length] ?? '#FFF5F7';
 }

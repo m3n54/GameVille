@@ -4,13 +4,17 @@ import { motion } from 'framer-motion';
 import SnakeSVG from './SnakeSVG';
 import LadderSVG from './LadderSVG';
 import PawnSVG from './PawnSVG';
-import { tileToGridPos, GRID_SIZE } from './boardUtils';
+import { tileToGridPos, GRID_SIZE, tileColor } from './boardUtils';
 import { usePawnAnim } from './usePawnAnim';
 
 interface PlayerState {
   id: string;
   position: number;
   color: string;
+  /** Optional snake/ladder traversal path. When the server reports a snake/ladder
+   *  hit on a dice result, the container synthesizes the full hop path including
+   *  the snake head + tail (or ladder bottom + top) so the pawn visits every tile. */
+  path?: number[];
 }
 interface Props {
   players: PlayerState[];
@@ -22,7 +26,7 @@ interface Props {
   onAnimComplete?: (playerId: string) => void;
 }
 
-const TILE_PALETTE = ['#FFF5F7', '#FFE4EC', '#E5F4FB', '#FFEFD8']; // checkerboard 4-color
+const STACK_OFFSET_STEP_PX = 14;
 
 function buildSpecialTileSet(
   snakes: [number, number][],
@@ -49,10 +53,12 @@ function PawnLayer({
   skip: boolean;
   onComplete: () => void;
 }) {
-  const display = usePawnAnim(p.position, skip, onComplete);
+  const display = usePawnAnim(p.position, skip, p.path, onComplete);
   const { row, col } = tileToGridPos(display.tile);
-  // Multi-pawn per tile: stack vertically via last-hex-digit offset
-  const stackOffset = (parseInt(p.id.slice(-1), 16) % 2) * 18;
+  // Multi-pawn per tile: deterministic vertical stack via charCode mod. Socket.IO
+  // ids are A-Za-z0-9_- — `parseInt(., 16)` was NaN ~70% of the time, breaking
+  // CSS. charCodeAt always returns a number; mod 4 caps the visible offset.
+  const stackOffset = ((p.id.charCodeAt(p.id.length - 1) || 0) % 4) * STACK_OFFSET_STEP_PX;
   return (
     <div
       className="absolute"
@@ -106,11 +112,10 @@ export default function Board2D({
         }}
       >
         {Array.from({ length: 100 }, (_, i) => {
-          const { row, col } = tileToGridPos(i);
           const isSpecial = specialTiles.has(i);
           const color = isSpecial
             ? '#FFE9A8'
-            : TILE_PALETTE[(row + col) % TILE_PALETTE.length] ?? '#FFF5F7';
+            : tileColor(i);
           return (
             <div
               key={i}

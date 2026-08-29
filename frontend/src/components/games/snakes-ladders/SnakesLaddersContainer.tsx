@@ -7,6 +7,7 @@ import Board2D from './Board2D';
 import Dice3D from './Dice3D';
 import SoundFx from './SoundFx';
 import Confetti from './Confetti';
+import { SLIDE_MAX_MS } from './usePawnAnim';
 import type { SnakesLaddersState, ServerToClientEvents, ClientToServerEvents } from '@/types';
 
 interface Props {
@@ -15,7 +16,8 @@ interface Props {
 }
 
 // Server-emitted `game:action` payloads (event.data shape, not the client GameAction union).
-// See server/src/games/snakes-ladders.ts → `events.push({ type: 'diceResult', data: {...} })`.
+// See server/src/games/snakes-ladders.ts + server/src/index.ts:309-313 — `turnChange`
+// is rewritten to `turn` on the wire.
 type ServerGameAction =
   | {
       type: 'diceResult';
@@ -25,12 +27,44 @@ type ServerGameAction =
       snakeHit: [number, number] | null;
       ladderHit: [number, number] | null;
     }
-  | { type: 'turn'; nextPlayerId?: string; message?: string };
+  | { type: 'turn'; nextPlayerId?: string; message?: string }
+  // Older code paths / future-proof: server may send `turnChange` directly.
+  | { type: 'turnChange'; nextPlayerId?: string; message?: string };
 
 const dispatchSfx = (kind: 'roll' | 'hop' | 'snake' | 'ladder' | 'win') => {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent('gameville:sfx', { detail: kind }));
 };
+
+/** Build the full traversal path for a pawn after a dice roll.
+ *  - Plain hop: each intermediate tile from `from+1` to `to`.
+ *  - Snake bite: hop to snake head, then slide to tail in 1-tile steps so the
+ *    pawn visibly traverses the snake body.
+ *  - Ladder climb: hop to ladder bottom, then climb to top in 1-tile steps. */
+function buildPath(
+  from: number,
+  to: number,
+  snakeHit: [number, number] | null,
+  ladderHit: [number, number] | null,
+): number[] {
+  const dir = Math.sign(to - from) || 1;
+  const stepCount = Math.abs(to - from);
+  const tiles: number[] = [];
+  for (let i = 1; i <= stepCount; i++) tiles.push(from + dir * i);
+
+  if (snakeHit) {
+    const [head, tail] = snakeHit;
+    const sDir = Math.sign(tail - head) || 1;
+    const sLen = Math.abs(tail - head);
+    for (let i = 1; i <= sLen; i++) tiles.push(head + sDir * i);
+  } else if (ladderHit) {
+    const [bottom, top] = ladderHit;
+    const lDir = Math.sign(top - bottom) || 1;
+    const lLen = Math.abs(top - bottom);
+    for (let i = 1; i <= lLen; i++) tiles.push(bottom + lDir * i);
+  }
+  return tiles;
+}
 
 export default function SnakesLaddersContainer({ socket, state: initial }: Props) {
   const [gameState, setGameState] = useState<SnakesLaddersState | null>(initial);
@@ -38,7 +72,14 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
   const [message, setMessage] = useState('');
   const [glow, setGlow] = useState<{ tile: number; kind: 'snake' | 'ladder' } | null>(null);
   const [skipAnim, setSkipAnim] = useState(false);
+  // Per-player animation paths, indexed by socket id. Reset on each new dice roll
+  // for the rolling player; other players keep their previous path until their
+  // own diceResult arrives.
+  const [paths, setPaths] = useState<Record<string, number[] | undefined>>({});
   const glowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guard against win SFX replay on tab remount (isMyWin is true on first render
+  // after refresh of a finished game; we want it to fire once per actual win).
+  const hasPlayedWinRef = useRef(false);
   const myId = socket.id;
 
   useEffect(() => {
@@ -51,8 +92,9 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
 
     const handleAction = (data: unknown) => {
       const action = data as ServerGameAction;
-      if (action.type === 'turn') {
-        if (action.nextPlayerId === myId) {
+      if (action.type === 'turn' || action.type === 'turnChange') {
+        const nextId = action.nextPlayerId;
+        if (nextId === myId) {
           setMessage('Giliranmu! Lempar dadu! 🎲');
         } else {
           setMessage('Menunggu giliran pemain lain...');
@@ -66,8 +108,9 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
           dispatchSfx('roll');
           if (typeof action.value === 'number') {
             setSkipAnim(false); // fresh hop sequence per dice
-            // Defer hop SFX to next tick so Board2D's usePawnAnim picks up the new target first.
-            setTimeout(() => dispatchSfx('hop'), 0);
+            // Fire hop SFX synchronously (was setTimeout(0) which raced the
+            // Board2D RAF — the ~1 frame slip is inaudible).
+            dispatchSfx('hop');
           }
         }
         if (action.snakeHit) {
@@ -79,8 +122,18 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
           setGlow({ tile: bottom, kind: 'ladder' });
           dispatchSfx('ladder');
         }
+        // Compute and store the full traversal path for the rolling player so
+        // Board2D can animate hop-by-hop through the snake head/tail (or ladder
+        // bottom/top) instead of jumping pre-snake to post-snake in one step.
+        const from = (gameState?.players ?? []).find((p) => p.id === action.playerId)?.position ?? 0;
+        setPaths((prev) => ({
+          ...prev,
+          [action.playerId]: buildPath(from, action.newPosition, action.snakeHit, action.ladderHit),
+        }));
+        // Glow must outlive the slide animation (SLIDE_MAX_MS = 4000) — the old
+        // 1200ms timer made the highlight vanish mid-slide for every snake/ladder.
         if (glowTimerRef.current) clearTimeout(glowTimerRef.current);
-        glowTimerRef.current = setTimeout(() => setGlow(null), 1200);
+        glowTimerRef.current = setTimeout(() => setGlow(null), SLIDE_MAX_MS);
       }
     };
 
@@ -92,14 +145,22 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
       socket.off('game:action', handleAction);
       if (glowTimerRef.current) clearTimeout(glowTimerRef.current);
     };
-  }, [socket, myId]);
+  }, [socket, myId, gameState?.players]);
 
-  // Confetti + win SFX fire on game over.
+  // Confetti + win SFX fire on game over. The ref ensures a single fire per
+  // actual win — refreshing the tab after winning would otherwise replay the
+  // sound because isMyWin is true on first render.
   const isGameOver = gameState?.winner != null;
   const isMyWin = isGameOver && gameState?.winner === myId;
   useEffect(() => {
-    if (isMyWin) dispatchSfx('win');
-    // We intentionally only react to the win edge — isMyWin flips false after the next state.
+    if (isMyWin && !hasPlayedWinRef.current) {
+      hasPlayedWinRef.current = true;
+      dispatchSfx('win');
+    }
+    if (!isMyWin && hasPlayedWinRef.current) {
+      // Reset for the next game's potential win.
+      hasPlayedWinRef.current = false;
+    }
   }, [isMyWin]);
 
   const rollDice = useCallback(() => {
@@ -128,8 +189,13 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
   );
 
   const boardPlayers = useMemo(
-    () => players.map((p) => ({ id: p.id, position: p.position, color: p.color })),
-    [players],
+    () => players.map((p) => ({
+      id: p.id,
+      position: p.position,
+      color: p.color,
+      path: paths[p.id],
+    })),
+    [players, paths],
   );
 
   if (!gameState) {
