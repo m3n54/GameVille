@@ -7,6 +7,8 @@
 //   row 2 (tiles 20-29): left -> right
 //   ...alternating every row.
 
+import type { SnakeLink, LadderRung } from './types';
+
 export const GRID_SIZE = 10;
 export const TILE_SIZE = 0.9;
 export const GAP = 0.06;
@@ -82,4 +84,14 @@ export function tileToGridPos(tile: number): { row: number; col: number } {
     row: Math.floor(clamped / GRID_SIZE),
     col: clamped % GRID_SIZE,
   };
+}
+
+/** Lift a wire-format `[head, tail]` tuple into a named `SnakeLink`. */
+export function toSnakeLink([head, tail]: [number, number]): SnakeLink {
+  return { startTile: head, endTile: tail };
+}
+
+/** Lift a wire-format `[bottom, top]` tuple into a named `LadderRung`. */
+export function toLadderRung([bottom, top]: [number, number]): LadderRung {
+  return { startTile: bottom, endTile: top };
 }
