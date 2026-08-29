@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { motion } from 'framer-motion';
 import { useDiceRoll, RollPhase, SPIN_MS, FaceValue } from './useDiceRoll';
+import { easeOutCubic } from './boardUtils';
 
 // Normalized pip coordinates in [-0.32..0.32], laid out on each face plane.
 const PIP_LAYOUTS: Record<FaceValue, [number, number][]> = {
@@ -84,43 +85,46 @@ function DiceModel({
   skip: boolean;
 }) {
   const groupRef = useRef<THREE.Group>(null);
-  const startRef = useRef<number>(0);
+  // `rx`/`ry` are the React-mirrored rotation, used only for terminal settle / skip
+  // (one-shot state writes). During `spinning` we mutate `groupRef.current.rotation`
+  // directly each frame via `useFrame` to avoid 60 Hz setState churn.
   const [rx, setRx] = useState(0);
   const [ry, setRy] = useState(0);
   const rxRef = useRef(0);
   const ryRef = useRef(0);
+  const spinStartRef = useRef<number>(0);
+
+  // R3F render loop. `dt` is seconds since last frame. Decelerate from 6.5 rad/s
+  // to 0.5 rad/s using easeOutCubic on the linear progress. Mutating
+  // `groupRef.current.rotation` directly bypasses the React render cycle.
+  useFrame((_, dt) => {
+    if (phase !== 'spinning') return;
+    const g = groupRef.current;
+    if (!g) return;
+    const t = Math.min(1, (performance.now() - spinStartRef.current) / SPIN_MS);
+    const easedAngVel = 6 * (1 - easeOutCubic(t)) + 0.5;
+    g.rotation.x += easedAngVel * dt;
+    g.rotation.y += easedAngVel * dt * 1.05;
+  });
 
   useEffect(() => {
     if (phase === 'spinning') {
-      startRef.current = performance.now();
-      let cancelled = false;
-      const spin = () => {
-        if (cancelled) return;
-        const t = (performance.now() - startRef.current) / SPIN_MS;
-        if (t < 1) {
-          setRx((r) => {
-            const next = r + 0.18;
-            rxRef.current = next;
-            return next;
-          });
-          setRy((r) => {
-            const next = r + 0.24;
-            ryRef.current = next;
-            return next;
-          });
-          requestAnimationFrame(spin);
-        }
-      };
-      requestAnimationFrame(spin);
-      return () => {
-        cancelled = true;
-      };
-    } else if (phase === 'settling' || phase === 'landed') {
-      const v: FaceValue =
-        value in TARGET_ROTATIONS ? (value as FaceValue) : 3;
+      spinStartRef.current = performance.now();
+      return;
+    }
+    if (phase === 'settling' || phase === 'landed') {
+      const g = groupRef.current;
+      const v: FaceValue = value in TARGET_ROTATIONS ? (value as FaceValue) : 3;
       const [tx, ty] = TARGET_ROTATIONS[v];
-      const nextRx = nearestTurn(rxRef.current, tx);
-      const nextRy = nearestTurn(ryRef.current, ty);
+      // One-shot: pick shortest-path turn from current rotation, mirror to state.
+      const curX = g ? g.rotation.x : rxRef.current;
+      const curY = g ? g.rotation.y : ryRef.current;
+      const nextRx = nearestTurn(curX, tx);
+      const nextRy = nearestTurn(curY, ty);
+      if (g) {
+        g.rotation.x = nextRx;
+        g.rotation.y = nextRy;
+      }
       rxRef.current = nextRx;
       ryRef.current = nextRy;
       setRx(nextRx);
@@ -128,12 +132,19 @@ function DiceModel({
     }
   }, [phase, value]);
 
-  // Skip: jump directly to target via shortest-path turn
+  // Skip: jump directly to target via shortest-path turn (one-shot state write).
   useEffect(() => {
     if (skip && (value as FaceValue) in TARGET_ROTATIONS) {
       const [tx, ty] = TARGET_ROTATIONS[value as FaceValue];
-      const nextRx = nearestTurn(rxRef.current, tx);
-      const nextRy = nearestTurn(ryRef.current, ty);
+      const g = groupRef.current;
+      const curX = g ? g.rotation.x : rxRef.current;
+      const curY = g ? g.rotation.y : ryRef.current;
+      const nextRx = nearestTurn(curX, tx);
+      const nextRy = nearestTurn(curY, ty);
+      if (g) {
+        g.rotation.x = nextRx;
+        g.rotation.y = nextRy;
+      }
       rxRef.current = nextRx;
       ryRef.current = nextRy;
       setRx(nextRx);
