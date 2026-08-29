@@ -221,6 +221,9 @@ io.on('connection', (socket) => {
       // click Mulai again to begin the next match in the same room.
       if (roomData.state === 'finished') {
         const reset = resetRoomForNewGame(roomData.id);
+        // C5: defensive clear before overwrite. broadcastGameOver already
+        // deleted this entry on game-over, but a player may have left before
+        // the winner modal showed up, so we clear again before set() below.
         GAMES.delete(roomData.id);
         if (reset) {
           io.to(roomData.id).emit('player:update', reset.players);
@@ -284,19 +287,22 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // H4 belt-and-suspenders: an engine throw must not kill the worker or
-    // leave the acting client hanging — surface it as a normal error event.
+    // H2: widen try/catch to cover BOTH engine.handleAction AND the events
+    // dispatch loop — a throw in any event branch (e.g. stateForClient on a
+    // half-mutated state) must not kill the worker or leave the client hanging.
     let result;
     try {
       result = engine.handleAction(instance.state, socket.id, data);
-    } catch {
-      socket.emit('room:error', { message: 'Aksi gagal diproses' });
+      instance.state = result.newState;
+    } catch (err) {
+      socket.emit('room:error', { message: 'Internal game error' });
+      console.error('Game action error (engine):', err);
       return;
     }
-    instance.state = result.newState;
 
     // Process all events
-    for (const event of result.events) {
+    try {
+      for (const event of result.events) {
       switch (event.type) {
         case 'diceResult':
           io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
@@ -337,6 +343,10 @@ io.on('connection', (socket) => {
           socket.emit('room:error', event.data as { message: string });
           break;
       }
+    }
+    } catch (err) {
+      socket.emit('room:error', { message: 'Internal game error' });
+      console.error('Game action error (events):', err);
     }
   });
 
@@ -408,6 +418,10 @@ function broadcastGameOver(io: IOServer, instance: ReturnType<typeof findGameFor
   }
   io.to(instance.roomId).emit('game:over', { winnerId, winnerName });
   setRoomState(instance.roomId, 'finished');
+  // C5: single source of truth for GameInstance cleanup. Replaces the
+  // scattered GAMES.delete() calls in gameService.ts:103, gameService.ts:130,
+  // and index.ts:224 — all paths now converge here.
+  GAMES.delete(instance.roomId);
 }
 
 function currentTurnPlayerId(instance: NonNullable<ReturnType<typeof findGameForSocket>>): string | undefined {
@@ -415,7 +429,11 @@ function currentTurnPlayerId(instance: NonNullable<ReturnType<typeof findGameFor
     currentTurn?: number | string;
     players?: { id: string }[];
   };
-  // sea-battle stores the current player's id directly in state.currentTurn
+  // H1: always read from engine-owned state.currentTurn. The top-level
+  // instance.currentTurnIndex is set once at createInstance and is never
+  // updated when engines mutate state.currentTurn (post removePlayer/nextTurn).
+  // Fallback to it ONLY as last resort for legacy engines that lack
+  // state.currentTurn entirely.
   if (typeof s.currentTurn === 'string') return s.currentTurn;
   if (s.players && typeof s.currentTurn === 'number') return s.players[s.currentTurn]?.id;
   return instance.playerOrder[instance.currentTurnIndex];
