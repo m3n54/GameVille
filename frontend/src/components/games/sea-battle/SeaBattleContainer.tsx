@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Socket } from 'socket.io-client';
 import { motion, AnimatePresence } from 'framer-motion';
 import Grid from './Grid';
@@ -19,7 +19,18 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
   const [gameState, setGameState] = useState<SeaBattlePlayerView | null>(initial);
   const [message, setMessage] = useState('');
   const [lastShot, setLastShot] = useState<{ row: number; col: number } | null>(null);
+  // H6: tracked timers so unmount clears them (no setState-on-unmount warnings).
+  const timersRef = useRef<Set<number>>(new Set());
   const myId = socket.id;
+
+  // H6: clear all pending timers on unmount.
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      timers.forEach(clearTimeout);
+      timers.clear();
+    };
+  }, []);
 
   // Sync per-player view
   useEffect(() => {
@@ -56,7 +67,11 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
         } else {
           setMessage('💨 Meleset!');
         }
-        setTimeout(() => setLastShot(null), 1500);
+        const id = window.setTimeout(() => {
+          setLastShot(null);
+          timersRef.current.delete(id);
+        }, 1500);
+        timersRef.current.add(id);
       }
 
       if (action.type === 'turn') {
@@ -89,10 +104,6 @@ export default function SeaBattleContainer({ socket, state: initial }: Props) {
     if (!grid || !grid[row] || grid[row][col] !== ' ') return;
     socket.emit('game:action', { type: 'fire', payload: { row, col } });
   }, [socket, gameState]);
-
-  useEffect(() => {
-    setGameState(initial);
-  }, [initial]);
 
   if (!gameState) {
     return (
