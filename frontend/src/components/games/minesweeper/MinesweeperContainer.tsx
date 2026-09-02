@@ -38,6 +38,16 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
   const [message, setMessage] = useState('');
   // C7: useGameTurn owns the listener + state — single source of truth across games.
   const { isMyTurn: isMyTurnFromEvents } = useGameTurn(socket, socket.id ?? null);
+  // T1 (audit H4): after a mid-game recovery the server replays a SNAPSHOT
+  // only — no 'turn' event fires until somebody acts, and nobody can act while
+  // every UI thinks it's not their turn. The view now carries playerOrder
+  // (ids are already public), so derive the turn from the snapshot like the
+  // Hangman backstop does. Either signal saying "your turn" is enough.
+  const turnFromView =
+    view != null &&
+    Array.isArray(view.playerOrder) &&
+    view.playerOrder[view.currentTurn] === socket.id;
+  const isMyTurn = isMyTurnFromEvents || turnFromView;
   const [difficulty, setDifficulty] = useState<MinesweeperDifficulty>('sedang');
   const [mode, setMode] = useState<MinesweeperMode>('santai');
   // Bomb-count config (Step 3): 3-button segmented + conditional inputs.
@@ -299,17 +309,9 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
     );
   }
 
-  // C7: isMyTurn now comes from useGameTurn (strict FE-F3 equality).
-  // T1 (audit H4): after a mid-game recovery the server replays a SNAPSHOT
-  // only — no 'turn' event fires until somebody acts, and nobody can act while
-  // every UI thinks it's not their turn. The view now carries playerOrder
-  // (ids are already public), so derive the turn from the snapshot like the
-  // Hangman backstop does. Either signal saying "your turn" is enough.
-  const turnFromView =
-    view != null &&
-    Array.isArray(view.playerOrder) &&
-    view.playerOrder[view.currentTurn] === socket.id;
-  const isMyTurn = isMyTurnFromEvents || turnFromView;
+  // C7: isMyTurn is computed above (useGameTurn event stream OR the T1
+  // snapshot-derived backstop) — it is needed by the callbacks below, which
+  // are defined before the config early-return.
   const isOver = view.winner != null;
 
   return (
