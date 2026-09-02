@@ -12,11 +12,15 @@ const SOCKET_TO_ROOM = new Map<string, string>();
 
 // M5: identity fields arrive from untrusted clients. Validate once at the door
 // so oversized/hostile strings never enter ROOMS memory or get broadcast.
+// S1: callers may pass any garbage (missing payload on room:create used to
+// throw `data.name` inside the handler — uncaughtException pre-safeHandler),
+// so a non-object payload is an error STRING, never an exception.
 // `name` is host-only (room display name); joiners don't have it — see
 // validatePlayer below for the joiner-side check.
 export function validateIdentity(data: {
   name?: unknown; nickname?: unknown; color?: unknown; emoji?: unknown;
 }): string | null {
+  if (!data || typeof data !== 'object') return 'Data tidak valid';
   if (typeof data.name !== 'string' || data.name.trim().length === 0 || data.name.length > 40) {
     return 'Nama ruang harus 1-40 karakter';
   }
@@ -30,6 +34,7 @@ export function validateIdentity(data: {
 export function validatePlayer(data: {
   nickname?: unknown; color?: unknown; emoji?: unknown;
 }): string | null {
+  if (!data || typeof data !== 'object') return 'Data tidak valid';
   if (typeof data.nickname !== 'string' || data.nickname.trim().length === 0 || data.nickname.length > 24) {
     return 'Nickname harus 1-24 karakter';
   }
