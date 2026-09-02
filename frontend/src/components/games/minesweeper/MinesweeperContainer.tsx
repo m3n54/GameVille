@@ -169,7 +169,12 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
   );
 
   // === Config phase — server starts in phase 'config' with empty cells ===
-  if (!view || view.phase === 'config' || !view.cells || view.cells.length === 0) {
+  // S3: decide on `phase` ONLY. Pre-C6 the grid was generated at config time,
+  // so "cells empty" meant "still configuring" — but since C6 the grid is
+  // legitimately empty until the first reveal, and the old
+  // `cells.length === 0` clause kept the config UI on screen forever even
+  // after the server had accepted the board.
+  if (!view || view.phase === 'config') {
     return (
       <div className="max-w-md mx-auto space-y-6 text-center">
         <p className="text-2xl">💣</p>

@@ -100,9 +100,15 @@ export class MinesweeperEngine extends BaseGame {
       state.cols = cols;
       state.bombCount = bombCount;
       // C6: defer grid generation to the first reveal so the first click is
-      // guaranteed safe (3x3 around the click is bomb-free). phase stays
-      // 'config' until that reveal happens.
-      // (state.phase remains 'config' here)
+      // guaranteed safe (3x3 around the click is bomb-free). Initialized as null
+      // so a stale 'config'/'playing' state with no grid is detectable.
+      // S3: the phase MUST transition here. Nothing else ever set
+      // phase='playing', so reveals were rejected with "Atur permainan dulu!"
+      // forever — the pre-S3 comment claimed the flip happens "at that reveal",
+      // but the reveal handler itself guards on phase==='playing' (the
+      // chicken-and-egg made Minesweeper unplayable end-to-end, and the test
+      // suite papered over it with a manual enterPlayingPhase() helper).
+      state.phase = 'playing';
 
       events.push({ type: 'gameStart', data: { firstTurnId: state.playerOrder[0] } });
       return { newState: { ...state }, events };

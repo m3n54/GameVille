@@ -8,10 +8,10 @@ function makeState(): MinesweeperExtendedState {
   return engine.createInitialState(['p1', 'p2']);
 }
 
-// Helper: advance from initial 'config' phase to 'playing' so reveal/toggleFlag
-// actions pass the phase guard. The engine's config handler emits gameStart but
-// does NOT mutate phase — phase flips externally (gameService transitions after
-// config event is broadcast). Tests mimic that transition.
+// Helper: force the 'playing' phase directly (skipping config). Since S3 the
+// engine's own config handler transitions the phase, so config-then-reveal
+// tests no longer need this — it remains for tests that exercise reveal from
+// a hand-built state without running config first.
 function enterPlayingPhase(state: MinesweeperExtendedState): void {
   state.phase = 'playing';
 }
@@ -212,5 +212,42 @@ describe('MinesweeperView projection carries playerOrder (T1/H4)', () => {
     const view = toView(state);
     expect(view.cells.length).toBe(10);
     expect(view.playerOrder).toEqual(['p1', 'p2']);
+  });
+});
+
+// --- S3: config must transition the phase (playability regression) -----------
+
+describe('Minesweeper config phase transition (S3)', () => {
+  it('config sets phase to playing so the FIRST reveal works without manual help', () => {
+    // Pre-S3 nothing ever set phase='playing': reveals were rejected with
+    // "Atur permainan dulu!" forever and the FE config UI never left the
+    // screen — the game was unplayable end-to-end. This is the exact
+    // production flow: config (host) → first reveal by the opening player.
+    const state = makeState();
+    const engine = new MinesweeperEngine();
+
+    const cfg = engine.handleAction(state, 'p1', {
+      type: 'config',
+      payload: { difficulty: 'sedang', bombMode: 'fixed' },
+    });
+    expect(cfg.newState.phase).toBe('playing');
+    expect(cfg.events.some(e => e.type === 'error')).toBe(false);
+
+    const reveal = engine.handleAction(cfg.newState, 'p1', {
+      type: 'reveal',
+      payload: { row: 5, col: 5 },
+    });
+    expect(reveal.events.some(e => e.type === 'error')).toBe(false);
+    expect(reveal.events.some(e => e.type === 'revealResult')).toBe(true);
+    expect((reveal.newState as MinesweeperExtendedState).grid).not.toBeNull();
+  });
+
+  it('double-config after the board started is rejected', () => {
+    const state = makeState();
+    const engine = new MinesweeperEngine();
+    engine.handleAction(state, 'p1', { type: 'config', payload: { difficulty: 'sedang' } });
+    const again = engine.handleAction(state, 'p2', { type: 'config', payload: { difficulty: 'mudah' } });
+    expect(again.events.some(e => e.type === 'error')).toBe(true);
+    expect(state.difficulty).toBe('sedang'); // original board untouched
   });
 });
