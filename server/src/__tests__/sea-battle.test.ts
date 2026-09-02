@@ -109,5 +109,35 @@ describe('seaBattleView (C4 regression — per-player projection)', () => {
     // that mistake loudly instead of silently shipping a cheat.
     expect(() => seaBattleView(state)).toThrow(/forPlayerId is required/);
   });
+});
 
+describe('SeaBattleEngine.removePlayer (C2)', () => {
+  it('returns survivor as winner in 1v1 forfeit', () => {
+    const state = makeInitialState();
+    const engine = new SeaBattleEngine();
+    const result = engine.removePlayer(state, 'p1');
+    expect(result).toEqual({ playerOrder: ['p2'], gameOver: true });
+    expect(state.winner).toBe('p2');
+    expect(state.phase).toBe('finished');
   });
+
+  it('does not set winner if already finished', () => {
+    const state = makeInitialState();
+    state.winner = 'p1';
+    state.phase = 'finished';
+    const engine = new SeaBattleEngine();
+    const result = engine.removePlayer(state, 'p2');
+    expect(result.gameOver).toBeUndefined();
+  });
+});
+
+describe('SeaBattleEngine autoPlace (M1)', () => {
+  it('places a 5-ship fleet', () => {
+    const state = makeInitialState();
+    const engine = new SeaBattleEngine();
+    const result = engine.handleAction(state, 'p1', { type: 'autoPlace' });
+    const newState = result.newState as ReturnType<typeof engine.createInitialState>;
+    expect(newState.ships1.length).toBe(5);
+    expect(result.events.some(e => e.type === 'shipsPlaced')).toBe(true);
+  });
+});
