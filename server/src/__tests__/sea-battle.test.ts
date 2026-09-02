@@ -129,6 +129,21 @@ describe('SeaBattleEngine.removePlayer (C2)', () => {
     const result = engine.removePlayer(state, 'p2');
     expect(result.gameOver).toBeUndefined();
   });
+
+  it('ignores a non-participant leaver — must never decide the match (G1/H2)', () => {
+    // Pre-G1 the ternary mapped ANY unknown id onto player1's forfeit win: a
+    // 3rd/4th room member leaving mid-game instantly ended the match.
+    const state = makeInitialState();
+    const engine = new SeaBattleEngine();
+    const result = engine.removePlayer(state, 'phantom-spectator');
+    expect(result.gameOver).toBeUndefined();
+    expect(state.winner).toBeNull();
+    expect(state.phase).toBe('setup');
+    // Legitimate forfeit still works after the phantom leaves.
+    const real = engine.removePlayer(state, 'p2');
+    expect(real).toEqual({ playerOrder: ['p1'], gameOver: true });
+    expect(state.winner).toBe('p1');
+  });
 });
 
 describe('SeaBattleEngine autoPlace (M1)', () => {

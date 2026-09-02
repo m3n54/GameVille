@@ -1,5 +1,5 @@
 import type { Server, Socket } from 'socket.io';
-import { createInstance } from './games/base';
+import { createInstance, validateGameComposition } from './games/base';
 import {
   GAMES,
   engines,
@@ -253,6 +253,15 @@ export function registerSocketHandlers(io: IO): void {
       const engine = engines[roomData.gameType];
       if (!engine) {
         socket.emit('room:error', { message: 'Mesin permainan tidak tersedia' });
+        return;
+      }
+      // G1 (audit H2): per-game composition contract — Sea Battle with 3-4
+      // players used to start, leaving phantom members whose disconnect
+      // instantly forfeited the match to player1 (and leaked player2's grid
+      // to them). Reject with a player-facing message instead.
+      const compositionError = validateGameComposition(roomData.gameType, roomData.players.length);
+      if (compositionError) {
+        socket.emit('room:error', { message: compositionError });
         return;
       }
 

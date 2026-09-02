@@ -151,6 +151,38 @@ describe('S1: server survives malformed payloads (audit H1)', () => {
     expect(received.length).toBe(10);
   }, 15_000);
 
+  it('refuses to start Sea Battle with 3 players (G1/H2 wiring through game:start)', async () => {
+    const host = connect();
+    const p2 = connect();
+    const p3 = connect();
+    for (const c of [host, p2, p3]) await new Promise<void>((resolve) => c.on('connect', resolve));
+
+    const room = await createRoom(host, 'g1-host');
+    for (const [c, nick] of [[p2, 'g1-p2'], [p3, 'g1-p3']] as const) {
+      const joinAck = await onceAck<{ ok: boolean }>(c, 'room:join', {
+        pin: room.pin, nickname: nick, color: '#A8D8EA', emoji: '🐢',
+      });
+      expect(joinAck.ok).toBe(true);
+    }
+    for (const c of [host, p2, p3]) c.emit('player:ready', { ready: true });
+    host.emit('game:select', { gameType: 'sea-battle' });
+    await new Promise((r) => setTimeout(r, 150));
+
+    const errors: string[] = [];
+    host.on('room:error', (e) => errors.push(e.message));
+    const started: string[] = [];
+    p2.on('game:started', (g) => started.push(g));
+
+    host.emit('game:start');
+    await new Promise((r) => setTimeout(r, 300));
+
+    expect(errors.some((m) => m.includes('2 pemain'))).toBe(true);
+    expect(started).toHaveLength(0); // the match must never begin
+    // Room must remain joinable ('waiting') — the host picks another game.
+    const synced = await onceAck<{ ok: boolean; room?: Room }>(host, 'room:sync', { pin: room.pin });
+    expect(synced.room?.state).toBe('waiting');
+  }, 15_000);
+
   it('rate-limits game:action without affecting normal play (audit M-3)', async () => {
     const host = connect();
     await new Promise<void>((resolve) => host.on('connect', resolve));

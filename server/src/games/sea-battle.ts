@@ -226,6 +226,13 @@ export class SeaBattleEngine extends BaseGame {
   // Disconnection handling: sea battle is strictly 1v1 — the remaining player wins by forfeit.
   override removePlayer(state: SeaBattleState, playerId: string): { playerOrder: string[]; gameOver?: boolean } {
     if (state.winner || state.phase === 'finished') return { playerOrder: [] };
+    // G1 (audit H2): a non-participant (stale instance from a pre-G1 start, or
+    // any id that is not one of the two registered players) must NEVER decide
+    // the match. The old ternary mapped any unknown id onto player1's forfeit
+    // win; ignore the leaver instead.
+    if (playerId !== state.player1Id && playerId !== state.player2Id) {
+      return { playerOrder: [] };
+    }
     const other = playerId === state.player1Id ? state.player2Id : state.player1Id;
     if (other) {
       // C2: return survivor's id per engine convention; 1v1 forfeit → survivor wins.

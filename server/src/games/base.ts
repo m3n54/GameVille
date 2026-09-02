@@ -1,5 +1,30 @@
 import { GameType } from '../types';
 
+// === G1: per-game player-composition contract (audit H2) =====================
+// Sea Battle is strictly 1v1: createInitialState reads playerOrder[0] and [1]
+// only. A 3-4 player room used to start it anyway (canStartGame only checked
+// ≥2 players), leaving extra members as phantoms — and SeaBattleEngine.
+// removePlayer treated any leaver as "the other player", so a phantom's
+// disconnect instantly declared player1 the winner (and projected player2's
+// grid as the phantom's "my board"). Enforce the contract at game:start.
+export const GAME_PLAYER_REQUIREMENTS: Record<GameType, { min: number; max: number }> = {
+  'snakes-ladders': { min: 2, max: 4 },
+  'hangman': { min: 2, max: 4 },
+  'sea-battle': { min: 2, max: 2 },
+  'minesweeper': { min: 2, max: 4 },
+};
+
+// Returns null when the composition is legal, else a player-facing error.
+export function validateGameComposition(gameType: GameType, playerCount: number): string | null {
+  const req = GAME_PLAYER_REQUIREMENTS[gameType];
+  if (!req) return 'Mesin permainan tidak tersedia';
+  if (playerCount < req.min || playerCount > req.max) {
+    if (req.max === 2) return 'Permainan ini hanya untuk 2 pemain';
+    return `Jumlah pemain harus ${req.min}-${req.max} untuk permainan ini`;
+  }
+  return null;
+}
+
 export interface GameInstance {
   roomId: string;
   gameType: GameType;
