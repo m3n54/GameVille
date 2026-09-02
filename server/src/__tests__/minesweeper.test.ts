@@ -105,6 +105,36 @@ describe('Minesweeper bomb config validation', () => {
 
     expect(result.events.some(e => e.type === 'error')).toBe(true);
   });
+
+  it('rejects custom bomb count above rows*cols-9 (for sedang: 91)', () => {
+    // M-bomb: baseMaxBombs = rows*cols - 9 (C6 first-click safety). Custom
+    // count above that is impossible to lay out without breaking the safe zone.
+    const state = makeState();
+    const engine = new MinesweeperEngine();
+
+    const result = engine.handleAction(state, 'p1', {
+      type: 'config',
+      payload: { difficulty: 'sedang', bombMode: 'custom', customBombCount: 999 },
+    });
+
+    expect(result.events.some(e => e.type === 'error')).toBe(true);
+  });
+
+  it('random mode picks count within range', () => {
+    // Random mode derives bombCount via Math.random in [min, max]. The
+    // resolved value must land inside the declared range.
+    const state = makeState();
+    const engine = new MinesweeperEngine();
+
+    const result = engine.handleAction(state, 'p1', {
+      type: 'config',
+      payload: { difficulty: 'sedang', bombMode: 'random', bombRange: { min: 20, max: 25 } },
+    });
+    const newState = result.newState as MinesweeperExtendedState;
+
+    expect(newState.bombCount).toBeGreaterThanOrEqual(20);
+    expect(newState.bombCount).toBeLessThanOrEqual(25);
+  });
 });
 
 describe('Minesweeper first-click safety (C6)', () => {
