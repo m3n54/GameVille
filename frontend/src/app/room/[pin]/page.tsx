@@ -61,19 +61,17 @@ export default function RoomPage() {
     if (room) return;
     if (isSyncingRef.current) return; // H5: another effect already triggered sync
     isSyncingRef.current = true;
-    syncRoom(pin, (state, turnPlayerId) => {
+    syncRoom(pin, (state) => {
       isSyncingRef.current = false;
       everHadRoomRef.current = true;
       if (state != null) {
         setGameState(state);
         setGameActive(true);
       }
-      if (turnPlayerId) {
-        // Hand the recovered turn to any container that just mounted —
-        // dispatched after mount via a microtask-safe custom event is
-        // overkill; containers read this through their own sync callback.
-        window.dispatchEvent(new CustomEvent('gameville:turn', { detail: turnPlayerId }));
-      }
+      // T1 (audit H4): the turnPlayerId CustomEvent relay was removed — nothing
+      // ever listened for it, and MinesweeperContainer now derives the turn
+      // from the snapshot's playerOrder[currentTurn] (the other games already
+      // read their turn from the replayed state).
     });
   }, [socket, connected, pin, room, syncRoom]);
 
@@ -123,7 +121,7 @@ export default function RoomPage() {
     // Clear local state first so the sync effect's `!room` gate re-runs.
     // syncRoom itself re-fetches regardless; clearing avoids stale renders
     // between reconnect and ack.
-    syncRoom(pin, (state, turnPlayerId) => {
+    syncRoom(pin, (state) => {
       isSyncingRef.current = false;
       // Same gate as the mount effect — a reconnected member whose sync ack
       // takes >1.5s must not see the F9 join form pop over their game.
@@ -131,9 +129,6 @@ export default function RoomPage() {
       if (state != null) {
         setGameState(state);
         setGameActive(true);
-      }
-      if (turnPlayerId) {
-        window.dispatchEvent(new CustomEvent('gameville:turn', { detail: turnPlayerId }));
       }
     });
   };

@@ -435,6 +435,9 @@ export function toView(state: MinesweeperExtendedState): MinesweeperView {
       cells: [],
       flagsUsed: 0,
       currentTurn: state.currentTurn,
+      // T1 (audit H4): see MinesweeperView.playerOrder — snapshot-only turn
+      // resolution for mid-game recovery.
+      playerOrder: state.playerOrder,
       chainActive: state.chainActive,
       winner: state.winner,
     };
@@ -470,6 +473,8 @@ export function toView(state: MinesweeperExtendedState): MinesweeperView {
     cells,
     flagsUsed,
     currentTurn: state.currentTurn,
+    // T1 (audit H4): see MinesweeperView.playerOrder.
+    playerOrder: state.playerOrder,
     chainActive: state.chainActive,
     winner: state.winner,
   };

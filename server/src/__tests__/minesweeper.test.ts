@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { MinesweeperEngine, type MinesweeperExtendedState } from '../games/minesweeper';
+import { MinesweeperEngine, toView, type MinesweeperExtendedState } from '../games/minesweeper';
 
 // --- Fixtures ----------------------------------------------------------------
 
@@ -186,5 +186,31 @@ describe('Minesweeper first-click safety (C6)', () => {
     expect(result.newState.firstClick).toEqual({ row: 5, col: 5 });
     // totalSafeCells should equal rows*cols - bombCount.
     expect(result.newState.totalSafeCells).toBe(100 - 15);
+  });
+});
+// --- T1 (audit H4): snapshot-only turn resolution -----------------------------
+
+describe('MinesweeperView projection carries playerOrder (T1/H4)', () => {
+  it('toView includes playerOrder on the null-grid (pre-first-reveal) path', () => {
+    // Mid-game recovery replays a snapshot with NO events. currentTurn is an
+    // index — without playerOrder in the view, no client can resolve whose
+    // turn index N is, and every UI deadlocks (isMyTurn false for all).
+    const state = makeState(); // grid still null
+    expect(state.grid).toBeNull();
+    const view = toView(state);
+    expect(view.cells).toEqual([]);
+    expect(view.playerOrder).toEqual(['p1', 'p2']);
+  });
+
+  it('toView includes playerOrder after the grid exists', () => {
+    const state = makeState();
+    const engine = new MinesweeperEngine();
+    engine.handleAction(state, 'p1', { type: 'config', payload: { difficulty: 'sedang' } });
+    enterPlayingPhase(state);
+    engine.handleAction(state, 'p1', { type: 'reveal', payload: { row: 5, col: 5 } });
+
+    const view = toView(state);
+    expect(view.cells.length).toBe(10);
+    expect(view.playerOrder).toEqual(['p1', 'p2']);
   });
 });

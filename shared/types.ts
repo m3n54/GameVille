@@ -203,6 +203,12 @@ export interface MinesweeperView {
   cells: { state: CellState; adjacent: number; exploded?: boolean }[][];
   flagsUsed: number;
   currentTurn: number;
+  // T1 (audit H4): socket ids in turn order. currentTurn is an index into this
+  // array — without it a client recovering mid-game from a snapshot alone
+  // cannot resolve "whose turn is index N", deadlocking every player's UI
+  // (isMyTurn stayed false until the next turn event, which requires someone
+  // to act first). Ids are already public via the player list — no leak.
+  playerOrder: string[];
   chainActive: boolean;
   winner: 'team' | 'none' | null;
 }
