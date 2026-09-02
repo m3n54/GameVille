@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { SeaBattleEngine, seaBattleView } from '../games/sea-battle';
-import type { SeaBattleState } from '../../shared/types';
+import type { SeaBattleState } from '../../../shared/types';
 
 // --- Fixtures ----------------------------------------------------------------
 
