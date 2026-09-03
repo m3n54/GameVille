@@ -10,6 +10,10 @@ export interface Player {
   isHost: boolean;
   isReady: boolean;
   joinedAt: number;
+  // R1 (audit H-3): true while a mid-game disconnect sits inside its grace
+  // window — the seat is kept (turn rotation untouched) until the player
+  // rejoins via room:sync or the sweeper forfeits them. undefined = connected.
+  disconnected?: boolean;
 }
 
 export interface Room {
@@ -79,7 +83,11 @@ export interface ClientToServerEvents {
   'room:create': (data: { name: string; nickname: string; color: string; emoji: string }, callback: (ack: RoomAck) => void) => void;
   'room:join': (data: { pin: string; nickname: string; color: string; emoji: string }, callback: (ack: RoomAck) => void) => void;
   'room:leave': () => void;
-  'room:sync': (data: { pin: string }, callback: (response: SyncAck) => void) => void;
+  // R1 (audit H-3): nickname is optional and comes from the client's saved
+  // identity (sessionStorage) — after a page reload the socket AND its
+  // socket.data are brand new, so the server needs the name to match the
+  // returning member (and restore a grace-window seat mid-game).
+  'room:sync': (data: { pin: string; nickname?: string }, callback: (response: SyncAck) => void) => void;
   'player:ready': (data: { ready: boolean }) => void;
   'game:select': (data: { gameType: GameType }) => void;
   'game:start': () => void;

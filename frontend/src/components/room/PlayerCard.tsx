@@ -33,6 +33,13 @@ export default function PlayerCard({ player, isMe }: PlayerCardProps) {
           <span className={`text-xs font-semibold ${player.isReady ? 'text-green-500' : 'text-cute-muted'}`}>
             {player.isReady ? 'Siap!' : 'Belum siap'}
           </span>
+          {/* R1 (audit H-3): mid-game disconnect inside its grace window — the
+              seat is kept, the server is waiting for this player to return. */}
+          {player.disconnected && (
+            <span className="text-xs font-semibold text-amber-500 animate-pulse">
+              menyambung ulang…
+            </span>
+          )}
         </div>
       </div>
     </motion.div>

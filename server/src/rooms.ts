@@ -10,6 +10,78 @@ const ROOMS = new Map<string, Room>();
 // clear in leaveRoom. findByPlayer now consults the index first.
 const SOCKET_TO_ROOM = new Map<string, string>();
 
+// R1 (audit H-3): mid-game disconnects enter a grace window instead of being
+// spliced out immediately — a page refresh or network blip must be able to
+// reclaim the seat. Keyed by the OLD socket id. Deliberately NOT part of the
+// Room type: pending exits are server-side state, never broadcast verbatim
+// (clients only ever see the `disconnected` flag on the player list).
+export interface PendingExit {
+  roomId: string;
+  nickname: string;
+  at: number;
+}
+const PENDING_EXITS = new Map<string, PendingExit>();
+
+// A consumed/returned pending exit carries its map key — every caller needs
+// the old socket id to finish the exit (immediate path) or rename the seat.
+export type ConsumedPendingExit = PendingExit & { socketId: string };
+
+// Register a mid-game disconnect inside its grace window. Nickname matching on
+// rejoin is safe because joinRoom (M-1) guarantees unique nicknames per room.
+export function markPendingExit(socketId: string, room: Room, player: Player): void {
+  PENDING_EXITS.set(socketId, { roomId: room.id, nickname: player.nickname, at: Date.now() });
+  player.disconnected = true;
+}
+
+// Consume the pending exit for this room+nickname, if any. Returns undefined
+// when no grace exit is pending — room:sync uses that to REFUSE the rejoin,
+// which is what prevents hijacking the seat of an actively connected player.
+export function takePendingExitByNickname(roomId: string, nickname: string): ConsumedPendingExit | undefined {
+  for (const [socketId, entry] of PENDING_EXITS) {
+    if (entry.roomId === roomId && entry.nickname === nickname) {
+      PENDING_EXITS.delete(socketId);
+      return { socketId, ...entry };
+    }
+  }
+  return undefined;
+}
+
+// Pure sweep logic, separated from any interval so tests can drive expiry with
+// a synthetic clock (same pattern as gameService.sweepRooms).
+export function expirePendingExits(now: number, graceMs: number): ConsumedPendingExit[] {
+  const expired: ConsumedPendingExit[] = [];
+  for (const [socketId, entry] of PENDING_EXITS) {
+    if (now - entry.at > graceMs) {
+      PENDING_EXITS.delete(socketId);
+      expired.push({ socketId, ...entry });
+    }
+  }
+  return expired;
+}
+
+// Drop a pending exit outright — used when the exit is being processed
+// immediately (explicit leave / expiry), making any record for that socket
+// obsolete.
+export function clearPendingExit(socketId: string): void {
+  PENDING_EXITS.delete(socketId);
+}
+
+// R1: PIN lookup across ALL room states. findByPin only matches 'waiting'
+// rooms (the join lock), but the mid-game rejoin needs to find a 'playing'
+// room by the PIN in the page URL.
+export function findRoomByPin(pin: string): Room | undefined {
+  return Array.from(ROOMS.values()).find(r => r.pin === pin);
+}
+
+// R1: re-point the C2 index after a mid-game seat restore. The old socket is
+// gone (its pending exit was just consumed) — leaving its entry would let a
+// late duplicate disconnect packet still resolve findByPlayer and splice the
+// freshly restored seat back out.
+export function rebindSocketIndex(oldSocketId: string, newSocketId: string, roomId: string): void {
+  if (SOCKET_TO_ROOM.get(oldSocketId) === roomId) SOCKET_TO_ROOM.delete(oldSocketId);
+  SOCKET_TO_ROOM.set(newSocketId, roomId);
+}
+
 // M5: identity fields arrive from untrusted clients. Validate once at the door
 // so oversized/hostile strings never enter ROOMS memory or get broadcast.
 // S1: callers may pass any garbage (missing payload on room:create used to
@@ -95,7 +167,8 @@ export function joinRoom(pin: string, data: { nickname: string; color: string; e
   if (room.players.length >= 4) return { ok: false, error: 'Kode ruang tidak valid atau ruang sudah penuh!' };
   // C3: same socket trying to join twice (e.g. user has the room open in
   // two tabs) would otherwise push a second player record under the same id.
-  // When one tab disconnects, handlePlayerExit would remove the player that
+  // When one tab disconnects, processPlayerExit (formerly handlePlayerExit)
+  // would remove the player that
   // BOTH tabs were rendering, and the surviving tab loses its membership.
   // M-1: must stay ABOVE the nickname check — a re-join from the same socket
   // legitimately repeats its own nickname and must still succeed.

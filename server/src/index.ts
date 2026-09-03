@@ -4,7 +4,7 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import type { ClientToServerEvents, ServerToClientEvents } from './types';
 import { registerSocketHandlers } from './socketHandlers';
-import { startRoomSweeper } from './gameService';
+import { startRoomSweeper, startExitSweeper } from './gameService';
 
 // === CORS (deploy F4) =======================================================
 // Comma-separated origin list. Entries of the form `https://*.domain.tld` are
@@ -46,6 +46,10 @@ app.get('/health', (_req, res) => {
 });
 
 startRoomSweeper();
+// R1 (audit H-3): forfeit mid-game grace exits once GRACE_MS passes — the
+// sweeper needs io because expiry replays the full immediate exit path
+// (broadcasts included).
+startExitSweeper(io);
 
 // S1 (audit H1): all connection wiring lives in socketHandlers.ts — both so the
 // exit/turn paths stay in one reviewable layer and so the handler layer can be

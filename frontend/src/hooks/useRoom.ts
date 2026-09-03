@@ -153,7 +153,12 @@ export function useRoom(socket: Socket<ServerToClientEvents, ClientToServerEvent
   // "Buat Ruang Baru" by mistake, creating a fresh room.
   const syncRoom = useCallback((pin: string, onGameState?: (state: unknown, turnPlayerId?: string) => void) => {
     if (!socket) return;
-    socket.emit('room:sync', { pin }, (response: SyncAck) => {
+    // R1 (audit H-3): after a page reload the socket AND its server-side
+    // socket.data are brand new — send the saved identity so the server can
+    // re-attach the member and restore a grace-window seat mid-game. A
+    // nickname alone never grants access; the server still verifies membership.
+    const nickname = loadIdentity()?.nickname ?? undefined;
+    socket.emit('room:sync', { pin, nickname }, (response: SyncAck) => {
       if (response.ok && response.room) {
         setRoomStoreState({ room: response.room });
         recomputeMyId(response.room.players);

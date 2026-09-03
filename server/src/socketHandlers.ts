@@ -4,10 +4,11 @@ import {
   GAMES,
   engines,
   stateForClient,
-  handlePlayerExit,
+  processPlayerExit,
   allowEvent,
   findGameForSocket,
   clearRateLimitsForSocket,
+  renameEnginePlayerId,
 } from './gameService';
 import {
   createRoom,
@@ -22,8 +23,11 @@ import {
   validatePlayer,
   resetRoomForNewGame,
   reattachPlayer,
+  findRoomByPin,
+  takePendingExitByNickname,
+  rebindSocketIndex,
 } from './rooms';
-import type { ClientToServerEvents, ServerToClientEvents, GameType } from './types';
+import type { ClientToServerEvents, ServerToClientEvents, GameType, Room } from './types';
 
 type IO = Server<ClientToServerEvents, ServerToClientEvents>;
 type GameSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -139,11 +143,14 @@ export function registerSocketHandlers(io: IO): void {
     // to strand a ghost in the engine's turn rotation (H2).
     // SV-H5: ack the client so the UI can stop its loading state immediately
     // instead of waiting for the next room:sync or the next mount to recover.
-    // C1: the disconnect handler will fire too; handlePlayerExit's exited flag
-    // is what makes that second call safe. socket.leave is idempotent.
+    // C1: the disconnect handler will fire too — claimExit below is what makes
+    // that second call safe (the guard moved here from the now socket-less
+    // processPlayerExit). socket.leave is idempotent.
+    // R1: an explicit leave is ALWAYS immediate — grace only softens LOST
+    // connections, never a deliberate "Keluar".
     socket.on('room:leave', safeHandler('room:leave', socket, (callback?: (ack: { ok: boolean }) => void) => {
       const room = findByPlayer(socket.id);
-      handlePlayerExit(io, socket);
+      if (claimExit(socket)) processPlayerExit(io, socket.id, { immediate: true });
       if (room) socket.leave(room.id);
       if (callback) callback({ ok: true });
     }));
@@ -154,10 +161,11 @@ export function registerSocketHandlers(io: IO): void {
     // matches rather than searching by PIN (findByPin only returns 'waiting'
     // rooms, which would break mid-game recovery).
     // SV-H4: if findByPlayer misses (the socket id changed on reconnect), fall
-    // back to reattaching by nickname on a waiting room. Mid-game reconnect is
-    // intentionally NOT supported — engine state references playerOrder which
-    // would need rebuilding, and the safer UX is to keep the player in the
-    // lobby until the current match ends.
+    // back to reattaching by nickname on a waiting room.
+    // R1 (audit H-3): mid-game reconnect is no longer a dead end — after the
+    // waiting-room reattach fails, a seat left by a grace-window disconnect is
+    // restored (see restoreMidGameSeat) and falls through to the SAME snapshot
+    // ack as any other member (gameState + turnPlayerId).
     socket.on('room:sync', safeHandler('room:sync', socket, (data, callback) => {
       // S1: an omitted ack makes `callback(...)` below throw; refuse — there is
       // nobody to answer. Same for a missing/non-object payload (data.pin).
@@ -167,9 +175,18 @@ export function registerSocketHandlers(io: IO): void {
         return;
       }
 
+      // R1: after a page reload BOTH the socket and its socket.data are new, so
+      // the identity must come from the payload (client's sessionStorage) when
+      // present; socket.data stays the fallback for reconnects on a live socket.
+      // A nickname alone never grants access — every rejoin path below still
+      // requires a matching member record / pending exit.
+      const nickname = (typeof data.nickname === 'string' && data.nickname.length > 0
+        ? data.nickname
+        : undefined)
+        ?? (socket.data as { nickname?: string }).nickname;
+
       let memberRoom = findByPlayer(socket.id);
       if ((!memberRoom || memberRoom.pin !== data.pin) && data.pin) {
-        const nickname = (socket.data as { nickname?: string }).nickname;
         if (nickname) {
           const reattach = reattachPlayer(socket.id, nickname, data.pin);
           if (reattach) {
@@ -180,6 +197,13 @@ export function registerSocketHandlers(io: IO): void {
             io.to(memberRoom.id).emit('player:update', memberRoom.players);
           }
         }
+      }
+      // R1 (audit H-3): mid-game seat restore. Only runs when the membership
+      // paths above missed; on success the common ack code below replays the
+      // game snapshot + turn exactly like any other mid-game sync.
+      if ((!memberRoom || memberRoom.pin !== data.pin) && data.pin && nickname) {
+        const restored = restoreMidGameSeat(io, socket, data.pin, nickname);
+        if (restored) memberRoom = restored;
       }
       if (!memberRoom || memberRoom.pin !== data.pin) {
         callback({ ok: false, error: 'Kamu bukan anggota ruang ini' });
@@ -469,7 +493,11 @@ export function registerSocketHandlers(io: IO): void {
     }));
 
     socket.on('disconnect', safeHandler('disconnect', socket, () => {
-      handlePlayerExit(io, socket);
+      // C1: claim first — a room:leave for this socket may have already run.
+      // R1: NOT immediate — a mid-game disconnect enters the grace window
+      // (gameService.processPlayerExit) so a blip/refresh can reclaim the
+      // seat; waiting/finished rooms exit immediately as before.
+      if (claimExit(socket)) processPlayerExit(io, socket.id);
       // SV-H3: free per-socket rate-limiter entries eagerly rather than waiting
       // for the 60s sweep. A 10k-socket burst would otherwise hold 10k Map
       // entries until the next sweep tick.
@@ -480,6 +508,53 @@ export function registerSocketHandlers(io: IO): void {
 }
 
 // === Helpers ===
+
+// C1: claim this socket's exit so the later 'disconnect' (or a duplicate
+// room:leave) short-circuits instead of re-running the exit path against an
+// already-spliced room. Returns true on the first claim only.
+function claimExit(socket: GameSocket): boolean {
+  const data = socket.data as { exited?: boolean };
+  if (data.exited) return false;
+  data.exited = true;
+  return true;
+}
+
+// R1 (audit H-3): restore a seat left by a grace-window disconnect. Returns
+// the room on success, null when the caller must fall through to the generic
+// "not a member" ack. The pending-exit entry is the ONLY key that can restore
+// a seat — it is consumed on take, so the seat of an actively connected player
+// can never be hijacked by a second client claiming the same nickname.
+// Renaming the id (room record, C2 index, instance.playerOrder, engine state)
+// is all that's needed: every engine resolves turns from flat ids, so no
+// engine logic changes.
+function restoreMidGameSeat(io: IOServer, socket: GameSocket, pin: string, nickname: string): Room | null {
+  const room = findRoomByPin(pin);
+  if (!room || room.state !== 'playing') return null;
+  const player = room.players.find((p) => p.nickname === nickname);
+  if (!player) return null;
+  const pending = takePendingExitByNickname(room.id, nickname);
+  if (!pending) return null;
+
+  const oldId = pending.socketId;
+  player.id = socket.id;
+  delete player.disconnected;
+  // Old socket is gone: re-point the C2 index so findByPlayer(oldId) cannot
+  // resurrect the seat (e.g. a late duplicate disconnect packet).
+  rebindSocketIndex(oldId, socket.id, room.id);
+
+  const instance = GAMES.get(room.id);
+  if (instance) {
+    instance.playerOrder = instance.playerOrder.map((id) => (id === oldId ? socket.id : id));
+    renameEnginePlayerId(instance.gameType, instance.state, oldId, socket.id);
+  }
+
+  // Brand-new session — reset the C1 exit flag and tell the room the player
+  // is back (every client clears its "menyambung ulang…" indicator).
+  (socket.data as { exited?: boolean }).exited = false;
+  io.to(room.id).emit('player:update', room.players);
+  console.log(`[Room] Mid-game rejoin: ${nickname} restored in ${room.pin}`);
+  return room;
+}
 
 // Sea-battle needs per-player projections even within one broadcast tick:
 // the shooter sees the hit result immediately, the rest see the plain board.

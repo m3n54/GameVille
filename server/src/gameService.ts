@@ -1,11 +1,11 @@
-import type { Server, Socket } from 'socket.io';
+import type { Server } from 'socket.io';
 import { GameInstance, BaseGame } from './games/base';
 import { SnakesLaddersEngine } from './games/snakes-ladders';
 import { HangmanEngine, toHangmanView } from './games/hangman';
 import type { HangmanExtendedState } from './games/hangman';
 import { SeaBattleEngine, seaBattleView } from './games/sea-battle';
 import { MinesweeperEngine, toView } from './games/minesweeper';
-import { leaveRoom, setRoomState, getRoom, findByPlayer, listRooms, deleteRoom } from './rooms';
+import { leaveRoom, setRoomState, getRoom, findByPlayer, listRooms, deleteRoom, markPendingExit, expirePendingExits, clearPendingExit } from './rooms';
 import type { ClientToServerEvents, ServerToClientEvents } from './types';
 
 // === Domain layer (L2) ======================================================
@@ -56,27 +56,47 @@ export function computeNextTurnId(instance: GameInstance): string | null {
   return order[idx] ?? null;
 }
 
-// === Shared player-exit path (H1 + H2) ======================================
-// Used by BOTH the socket 'disconnect' handler and the explicit 'room:leave'
-// handler. Previously only disconnect pruned engine state, so leaving via the
-// button mid-game stranded a ghost in the turn rotation (H2), and the
-// last-leaver path returned no roomId so the GAMES entry leaked forever (H1).
+// === Shared player-exit path (H1 + H2 + R1) ==================================
+// Used by the socket 'disconnect' handler, the explicit 'room:leave' handler,
+// and the R1 grace sweeper (processExpiredExits). Previously only disconnect
+// pruned engine state, so leaving via the button mid-game stranded a ghost in
+// the turn rotation (H2), and the last-leaver path returned no roomId so the
+// GAMES entry leaked forever (H1).
+//
+// R1 (audit H-3): the function no longer takes the Socket — a grace-expired
+// exit must run for a socket id whose Socket object is long gone. The C1
+// `socket.data.exited` guard therefore moved up into the socketHandlers
+// callers; this function is idempotent per call instead.
 //
 // Semantics preserved verbatim from the old disconnect handler:
-//   - finished room → delete the game snapshot
-//   - mid-game      → engine.removePlayer (forfeit / solo-continuation per engine),
-//                     then either game:over or refreshed state + turn event
-export function handlePlayerExit(io: IO, socket: Socket): void {
-  // C1: socket.io fires both 'room:leave' and 'disconnect' for the same
-  // logical exit. Without this guard, the second call hits an empty room
-  // (findByPlayer returns undefined on the splice that already ran) and
-  // would either no-op or, worse, attempt engine.removePlayer on a game
-  // whose GAMES entry was just deleted by the first call. Mark the socket
-  // on first invocation; subsequent calls short-circuit.
-  if ((socket.data as { exited?: boolean }).exited) return;
-  (socket.data as { exited?: boolean }).exited = true;
+//   - finished room → delete the game snapshot / reset to waiting (C5)
+//   - mid-game      → engine.removePlayer (forfeit / solo-continuation per
+//                     engine), then either game:over or refreshed state + turn
+// NEW (R1): mid-game + NOT immediate + live GAMES entry → grace path: the seat
+// stays (no splice, no host reassignment, no index churn) so a refreshed/blipped
+// client can reclaim it via room:sync until GRACE_MS passes.
+export function processPlayerExit(io: IO, socketId: string, opts: { immediate?: boolean } = {}): void {
+  const immediate = opts.immediate === true;
 
-  const result = leaveRoom(socket.id);
+  // R1 grace path — MUST run before leaveRoom: leaveRoom splices the player
+  // and reassigns the host, which is exactly what the grace window postpones.
+  // Only for genuine disconnects; an explicit room:leave stays immediate.
+  // Waiting/finished rooms and game-less rooms fall through to the immediate
+  // path exactly as before, so lobby disconnects behave unchanged.
+  if (!immediate) {
+    const room = findByPlayer(socketId);
+    const player = room?.players.find((p) => p.id === socketId);
+    if (room && player && room.state === 'playing' && GAMES.has(room.id)) {
+      markPendingExit(socketId, room, player);
+      io.to(room.id).emit('player:update', room.players);
+      return;
+    }
+  }
+
+  // Fully leaving now — any pending-exit record for this socket is obsolete.
+  clearPendingExit(socketId);
+
+  const result = leaveRoom(socketId);
 
   if (!result.roomId) return;
 
@@ -111,13 +131,23 @@ export function handlePlayerExit(io: IO, socket: Socket): void {
     return;
   }
 
-  // Mid-game exit: prune the leaver so turns never rotate to a ghost.
+  // Mid-game exit (immediate path; grace expiry lands here too via
+  // processExpiredExits): prune the leaver so turns never rotate to a ghost.
+  finishImmediateMidGameExit(io, result.roomId, game, socketId);
+}
+
+// Tail of the immediate mid-game exit, extracted verbatim from the old
+// handlePlayerExit (now processPlayerExit) so BOTH callers (live exit + R1
+// grace expiry) replay the exact same engine/forfeit semantics without
+// duplication.
+function finishImmediateMidGameExit(io: IO, roomId: string, game: GameInstance, leaverId: string): void {
+  const room = getRoom(roomId);
   const engine = engines[game.gameType];
-  if (!engine) return;
-  const outcome = engine.removePlayer(game.state, socket.id);
+  if (!room || !engine) return;
+  const outcome = engine.removePlayer(game.state, leaverId);
   game.playerOrder = outcome.playerOrder.length > 0
     ? outcome.playerOrder
-    : game.playerOrder.filter((id) => id !== socket.id);
+    : game.playerOrder.filter((id) => id !== leaverId);
 
   if (outcome.gameOver) {
     const winnerState = game.state as { winner?: string | null };
@@ -125,14 +155,69 @@ export function handlePlayerExit(io: IO, socket: Socket): void {
     const winnerName = wId === 'team' ? 'Tim'
       : wId === 'none' ? '-'
         : room.players.find((p) => p.id === wId)?.nickname ?? 'Unknown';
-    io.to(result.roomId).emit('game:over', { winnerId: wId, winnerName });
-    setRoomState(result.roomId, 'finished');
-    GAMES.delete(result.roomId); // forfeit ends the match — nothing left to keep
+    io.to(roomId).emit('game:over', { winnerId: wId, winnerName });
+    setRoomState(roomId, 'finished');
+    GAMES.delete(roomId); // forfeit ends the match — nothing left to keep
   } else {
-    io.to(result.roomId).emit('game:state', stateForClient(game.gameType, game.state));
+    io.to(roomId).emit('game:state', stateForClient(game.gameType, game.state));
     const nextId = computeNextTurnId(game);
     if (nextId) {
-      io.to(result.roomId).emit('game:action', { type: 'turn', nextPlayerId: nextId });
+      io.to(roomId).emit('game:action', { type: 'turn', nextPlayerId: nextId });
+    }
+  }
+}
+
+// R1 (audit H-3): how long a mid-game-disconnected seat stays reclaimable
+// before the sweeper forfeits it. 60s covers a page refresh plus a slow
+// reconnect; turn starvation during the window is the accepted trade-off
+// (turn timeouts are audit item M-5, tracked separately).
+export const GRACE_MS = 60_000;
+
+// Pure sweep logic, separated from the interval so tests can drive expiry with
+// a synthetic clock (same pattern as sweepRooms). Each expired pending exit
+// replays the immediate exit path for the OLD socket id: leaveRoom(oldId)
+// splices the still-present record → engine.removePlayer → forfeit/game:over
+// or state+turn refresh — exactly what a disconnect did pre-R1.
+export function processExpiredExits(io: IO, now: number): void {
+  for (const expired of expirePendingExits(now, GRACE_MS)) {
+    processPlayerExit(io, expired.socketId, { immediate: true });
+  }
+}
+
+export function startExitSweeper(io: IO): void {
+  setInterval(() => processExpiredExits(io, Date.now()), 10_000).unref();
+}
+
+// R1 (audit H-3): rename a player id across every engine state that stores it.
+// All engines keep player ids flat in state, so an in-place rename restores a
+// seat without touching any engine logic. Per-game shapes (keep in sync if a
+// future engine stores ids elsewhere):
+//   snakes-ladders → state.players[].id
+//   hangman        → state.playerOrder[]
+//   sea-battle     → state.player1Id / player2Id / currentTurn (string id)
+//   minesweeper    → state.playerOrder[]
+export function renameEnginePlayerId(gameType: string, state: unknown, oldId: string, newId: string): void {
+  switch (gameType) {
+    case 'snakes-ladders': {
+      const s = state as { players?: { id: string }[] };
+      for (const p of s.players ?? []) {
+        if (p.id === oldId) p.id = newId;
+      }
+      break;
+    }
+    // hangman + minesweeper share the playerOrder[] shape.
+    case 'hangman':
+    case 'minesweeper': {
+      const s = state as { playerOrder?: string[] };
+      if (s.playerOrder) s.playerOrder = s.playerOrder.map((id) => (id === oldId ? newId : id));
+      break;
+    }
+    case 'sea-battle': {
+      const s = state as { player1Id?: string; player2Id?: string; currentTurn?: string };
+      if (s.player1Id === oldId) s.player1Id = newId;
+      if (s.player2Id === oldId) s.player2Id = newId;
+      if (s.currentTurn === oldId) s.currentTurn = newId;
+      break;
     }
   }
 }
