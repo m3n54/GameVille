@@ -203,15 +203,18 @@ export default function RoomPage() {
 
   if (gameActive && room.gameType) {
     const renderGame = () => {
+      // L-5: containers must not derive identity from socket.id — it changes
+      // on every websocket reconnect. Pass the stable myId (matched by
+      // nickname against room.players via useRoom) down instead.
       switch (room.gameType) {
         case 'snakes-ladders':
-          return <SnakesLaddersContainer socket={socket!} state={gameState as SnakesLaddersState} />;
+          return <SnakesLaddersContainer socket={socket!} state={gameState as SnakesLaddersState} myId={myId} />;
         case 'hangman':
-          return <HangmanContainer socket={socket!} state={gameState as HangmanState} />;
+          return <HangmanContainer socket={socket!} state={gameState as HangmanState} myId={myId} />;
         case 'sea-battle':
-          return <SeaBattleContainer socket={socket!} state={gameState as SeaBattlePlayerView} />;
+          return <SeaBattleContainer socket={socket!} state={gameState as SeaBattlePlayerView} myId={myId} />;
         case 'minesweeper':
-          return <MinesweeperContainer socket={socket!} state={gameState as MinesweeperView} />;
+          return <MinesweeperContainer socket={socket!} state={gameState as MinesweeperView} myId={myId} />;
         default:
           return <p>Game tidak dikenal</p>;
       }

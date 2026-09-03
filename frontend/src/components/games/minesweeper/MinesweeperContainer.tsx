@@ -17,6 +17,9 @@ import type {
 interface Props {
   socket: Socket<ServerToClientEvents, ClientToServerEvents>;
   state: MinesweeperView | null;
+  // L-5: stable self id from useRoom (match-by-nickname) — survives websocket
+  // reconnects, unlike socket.id which changes on every reconnect.
+  myId?: string | null;
 }
 
 const DIFFICULTIES: { value: MinesweeperDifficulty; label: string; detail: string }[] = [
@@ -31,13 +34,18 @@ const MODES: { value: MinesweeperMode; label: string; detail: string }[] = [
   { value: 'tantangan', label: 'Tantangan', detail: 'Rangkaian selama aman' },
 ];
 
-export default function MinesweeperContainer({ socket, state: initial }: Props) {
+export default function MinesweeperContainer({ socket, state: initial, myId: myIdProp }: Props) {
   const [view, setView] = useState<MinesweeperView | null>(
     initial as MinesweeperView | null,
   );
   const [message, setMessage] = useState('');
+  // L-5: prefer the stable prop; the socket.id fallback keeps the container
+  // usable standalone (only valid until the first reconnect swaps the id).
+  // socket.id is `string | undefined` in socket.io-client 4.8 — normalize to
+  // null so it fits the `string | null` identity shape used by useGameTurn.
+  const myId = myIdProp ?? socket.id ?? null;
   // C7: useGameTurn owns the listener + state — single source of truth across games.
-  const { isMyTurn: isMyTurnFromEvents } = useGameTurn(socket, socket.id ?? null);
+  const { isMyTurn: isMyTurnFromEvents } = useGameTurn(socket, myId);
   // T1 (audit H4): after a mid-game recovery the server replays a SNAPSHOT
   // only — no 'turn' event fires until somebody acts, and nobody can act while
   // every UI thinks it's not their turn. The view now carries playerOrder
@@ -46,7 +54,7 @@ export default function MinesweeperContainer({ socket, state: initial }: Props) 
   const turnFromView =
     view != null &&
     Array.isArray(view.playerOrder) &&
-    view.playerOrder[view.currentTurn] === socket.id;
+    view.playerOrder[view.currentTurn] === myId;
   const isMyTurn = isMyTurnFromEvents || turnFromView;
   const [difficulty, setDifficulty] = useState<MinesweeperDifficulty>('sedang');
   const [mode, setMode] = useState<MinesweeperMode>('santai');

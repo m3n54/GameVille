@@ -17,11 +17,14 @@ type RuntimeHangmanState = HangmanState & {
 interface Props {
   socket: Socket<ServerToClientEvents, ClientToServerEvents>;
   state: HangmanState | null;
+  // L-5: stable self id from useRoom (match-by-nickname) — survives websocket
+  // reconnects, unlike socket.id which changes on every reconnect.
+  myId?: string | null;
 }
 
 type Lang = 'id' | 'en';
 
-export default function HangmanContainer({ socket, state: initial }: Props) {
+export default function HangmanContainer({ socket, state: initial, myId: myIdProp }: Props) {
   const [gameState, setGameState] = useState<RuntimeHangmanState | null>(
     initial as RuntimeHangmanState | null,
   );
@@ -32,7 +35,11 @@ export default function HangmanContainer({ socket, state: initial }: Props) {
   const [language, setLanguage] = useState<Lang>('id');
   // H6: tracked timers so unmount clears them (no setState-on-unmount warnings).
   const timersRef = useRef<Set<number>>(new Set());
-  const myId = socket.id;
+  // L-5: prefer the stable prop; the socket.id fallback keeps the container
+  // usable standalone (only valid until the first reconnect swaps the id).
+  // socket.id is `string | undefined` in socket.io-client 4.8 — normalize to
+  // null so identity keeps a single `string | null` shape across containers.
+  const myId = myIdProp ?? socket.id ?? null;
 
   // H6: clear all pending timers on unmount.
   useEffect(() => {

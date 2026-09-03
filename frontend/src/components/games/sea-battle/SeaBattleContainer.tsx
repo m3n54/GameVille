@@ -10,18 +10,25 @@ import type { SeaBattlePlayerView, ServerToClientEvents, ClientToServerEvents } 
 interface Props {
   socket: Socket<ServerToClientEvents, ClientToServerEvents>;
   state: SeaBattlePlayerView | null;
+  // L-5: stable self id from useRoom (match-by-nickname) — survives websocket
+  // reconnects, unlike socket.id which changes on every reconnect.
+  myId?: string | null;
 }
 
 // C1: the server now sends each player their OWN projection (myGrid/enemyGrid/
 // myShips/enemySunkShips). The old client received both raw grids and stripped
 // enemy ships locally — pointless once the payload itself was the leak.
-export default function SeaBattleContainer({ socket, state: initial }: Props) {
+export default function SeaBattleContainer({ socket, state: initial, myId: myIdProp }: Props) {
   const [gameState, setGameState] = useState<SeaBattlePlayerView | null>(initial);
   const [message, setMessage] = useState('');
   const [lastShot, setLastShot] = useState<{ row: number; col: number } | null>(null);
   // H6: tracked timers so unmount clears them (no setState-on-unmount warnings).
   const timersRef = useRef<Set<number>>(new Set());
-  const myId = socket.id;
+  // L-5: prefer the stable prop; the socket.id fallback keeps the container
+  // usable standalone (only valid until the first reconnect swaps the id).
+  // socket.id is `string | undefined` in socket.io-client 4.8 — normalize to
+  // null so identity keeps a single `string | null` shape across containers.
+  const myId = myIdProp ?? socket.id ?? null;
 
   // H6: clear all pending timers on unmount.
   useEffect(() => {

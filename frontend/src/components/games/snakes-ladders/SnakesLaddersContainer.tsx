@@ -15,6 +15,9 @@ import type { SnakesLaddersState, ServerToClientEvents, ClientToServerEvents } f
 interface Props {
   socket: Socket<ServerToClientEvents, ClientToServerEvents>;
   state: SnakesLaddersState | null;
+  // L-5: stable self id from useRoom (match-by-nickname) — survives websocket
+  // reconnects, unlike socket.id which changes on every reconnect.
+  myId?: string | null;
 }
 
 // Server-emitted `game:action` payloads (event.data shape, not the client GameAction union).
@@ -38,7 +41,7 @@ const dispatchSfx = (kind: 'roll' | 'hop' | 'snake' | 'ladder' | 'win') => {
   window.dispatchEvent(new CustomEvent('gameville:sfx', { detail: kind }));
 };
 
-export default function SnakesLaddersContainer({ socket, state: initial }: Props) {
+export default function SnakesLaddersContainer({ socket, state: initial, myId: myIdProp }: Props) {
   const [gameState, setGameState] = useState<SnakesLaddersState | null>(initial);
   const [rolling, setRolling] = useState(false);
   const [message, setMessage] = useState('');
@@ -55,7 +58,11 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
   // pre-roll position without depending on gameState.players (which re-binds
   // the listener on every broadcast = 60+ cycles per game).
   const playersRef = useRef<SnakesLaddersState['players']>([]);
-  const myId = socket.id;
+  // L-5: prefer the stable prop; the socket.id fallback keeps the container
+  // usable standalone (only valid until the first reconnect swaps the id).
+  // socket.id is `string | undefined` in socket.io-client 4.8 — normalize to
+  // null so identity keeps a single `string | null` shape across containers.
+  const myId = myIdProp ?? socket.id ?? null;
 
   // Keep playersRef in sync with latest state — read by handleAction on dice events.
   useEffect(() => {
@@ -144,6 +151,23 @@ export default function SnakesLaddersContainer({ socket, state: initial }: Props
     setMessage('Melempar dadu...');
     socket.emit('game:action', { type: 'roll' });
   }, [socket, rolling]);
+
+  // L-1: rollDice() sets an optimistic `rolling` lock that only the
+  // game:state handler used to release. If the server rejects the roll
+  // (room:error — e.g. an engine error) the dice stayed locked until some
+  // other player's next broadcast. The lock must fail safe on rejection;
+  // game:state remains the single "roll succeeded" signal.
+  useEffect(() => {
+    if (!socket) return;
+    const handleRoomError = () => {
+      setRolling(false);
+    };
+    socket.on('room:error', handleRoomError);
+    return () => {
+      // F8: off() by named handler — never off(eventName) on this singleton.
+      socket.off('room:error', handleRoomError);
+    };
+  }, [socket]);
 
   // Defensive: during mid-game recovery the state may be partial — players could be
   // undefined/empty while currentTurn points past the end. Guard every indexed access.
