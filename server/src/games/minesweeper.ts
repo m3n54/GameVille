@@ -359,7 +359,13 @@ function generateGrid(state: MinesweeperExtendedState, safeRow: number, safeCol:
     }
   }
 
-  state.totalSafeCells = state.rows * state.cols - state.bombCount;
+  // M-6: if random sampling exhausted maxAttempts before placing every
+  // requested bomb (configs near the safe-zone capacity), the win-check must
+  // follow the REAL board, not the request — computing totalSafeCells from the
+  // requested bombCount counts safe cells that hold no bomb and makes the game
+  // unwinnable (revealedSafeCount can never reach totalSafeCells).
+  state.bombCount = placed;
+  state.totalSafeCells = state.rows * state.cols - placed;
 }
 
 function countAdjacent(state: MinesweeperExtendedState, row: number, col: number): number {

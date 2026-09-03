@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { MinesweeperEngine, toView, type MinesweeperExtendedState } from '../games/minesweeper';
 
 // --- Fixtures ----------------------------------------------------------------
@@ -249,5 +249,42 @@ describe('Minesweeper config phase transition (S3)', () => {
     const again = engine.handleAction(state, 'p2', { type: 'config', payload: { difficulty: 'mudah' } });
     expect(again.events.some(e => e.type === 'error')).toBe(true);
     expect(state.difficulty).toBe('sedang'); // original board untouched
+  });
+});
+
+// --- M-6: win-check must follow the REAL board, not the requested bombCount --
+
+describe('Minesweeper degenerate bomb placement (M-6)', () => {
+  it('recomputes bombCount/totalSafeCells when sampling cannot place all bombs', () => {
+    // random() === 0 makes every sample land on (0,0). That cell is OUTSIDE the
+    // 3x3 safe zone of a (5,5) first click, so attempt #1 plants a bomb there —
+    // then every remaining attempt retries the same occupied cell and `placed`
+    // stalls at 1 even though 15 bombs were requested (sedang). Pre-M-6 the
+    // win-check still used the requested 15, making the game unwinnable.
+    const spy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const state = makeState();
+      const engine = new MinesweeperEngine();
+      const cfg = engine.handleAction(state, 'p1', {
+        type: 'config',
+        payload: { difficulty: 'sedang', bombMode: 'fixed' },
+      });
+      expect(cfg.newState.bombCount).toBe(15); // requested before the reveal
+
+      // First reveal triggers the lazy generateGrid (C6 pattern: config → reveal).
+      const result = engine.handleAction(cfg.newState, 'p1', {
+        type: 'reveal',
+        payload: { row: 5, col: 5 },
+      });
+      const newState = result.newState as MinesweeperExtendedState;
+
+      expect(newState.bombCount).toBe(1);
+      expect(newState.totalSafeCells).toBe(10 * 10 - 1);
+      const bombs = newState.grid!.flat().filter(c => c.hasBomb).length;
+      expect(bombs).toBe(1);
+      expect(result.events.some(e => e.type === 'error')).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

@@ -32,6 +32,26 @@ function onceAck<T>(client: ClientSocket, event: string, payload: unknown): Prom
   });
 }
 
+// Resolves on the next game:action of the given type, with a hard timeout so a
+// missing broadcast fails the test with a clear message instead of hanging.
+function waitForGameAction(client: ClientSocket, type: string, timeoutMs = 5_000): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const listener = (a: unknown) => {
+      const evt = a as { type?: string };
+      if (evt?.type === type) {
+        clearTimeout(timer);
+        client.off('game:action', listener);
+        resolve(evt as Record<string, unknown>);
+      }
+    };
+    const timer = setTimeout(() => {
+      client.off('game:action', listener);
+      reject(new Error(`timeout waiting for game:action ${type}`));
+    }, timeoutMs);
+    client.on('game:action', listener);
+  });
+}
+
 async function createRoom(client: ClientSocket, nickname: string): Promise<Room> {
   const ack = await onceAck<{ ok: boolean; room?: Room }>(client, 'room:create', {
     name: `Audit Room ${nickname}`,
@@ -240,4 +260,83 @@ describe('S1: door validators tolerate garbage (pure layer)', () => {
   it('findByPin never returns non-waiting rooms (join lock used by H-3 analysis)', () => {
     expect(findByPin('000000')).toBeUndefined();
   });
+});
+
+describe('Handler regressions (M-1 duplicate nickname, L-4 fireResult broadcast)', () => {
+  it('room:join acks a nickname-specific error instead of the generic one (M-1)', async () => {
+    const host = connect();
+    await new Promise<void>((resolve) => host.on('connect', resolve));
+    const room = await createRoom(host, 'm1-host');
+
+    // Second client tries to join under the HOST's nickname — the ack must say
+    // WHY it failed, not the generic "invalid PIN / full" message.
+    const joiner = connect();
+    await new Promise<void>((resolve) => joiner.on('connect', resolve));
+    const joinAck = await onceAck<{ ok: boolean; error?: string }>(joiner, 'room:join', {
+      pin: room.pin, nickname: 'm1-host', color: '#A8D8EA', emoji: '🐢',
+    });
+    expect(joinAck.ok).toBe(false);
+    expect(joinAck.error).toBe('Nickname sudah dipakai di ruang ini!');
+
+    // The rejected joiner must not have entered the room.
+    const synced = await onceAck<{ ok: boolean; room?: Room }>(host, 'room:sync', { pin: room.pin });
+    expect(synced.room?.players).toHaveLength(1);
+
+    // A distinct nickname still joins the same room afterwards.
+    const other = connect();
+    await new Promise<void>((resolve) => other.on('connect', resolve));
+    const okAck = await onceAck<{ ok: boolean }>(other, 'room:join', {
+      pin: room.pin, nickname: 'm1-guest', color: '#A8D8EA', emoji: '🐢',
+    });
+    expect(okAck.ok).toBe(true);
+  }, 15_000);
+
+  it('broadcasts sea-battle fireResult to BOTH clients, not just the shooter (L-4)', async () => {
+    const host = connect();
+    const joiner = connect();
+    for (const c of [host, joiner]) await new Promise<void>((resolve) => c.on('connect', resolve));
+
+    const room = await createRoom(host, 'l4-host');
+    const joinAck = await onceAck<{ ok: boolean }>(joiner, 'room:join', {
+      pin: room.pin, nickname: 'l4-joiner', color: '#A8D8EA', emoji: '🐢',
+    });
+    expect(joinAck.ok).toBe(true);
+
+    host.emit('player:ready', { ready: true });
+    joiner.emit('player:ready', { ready: true });
+    host.emit('game:select', { gameType: 'sea-battle' });
+    await new Promise((r) => setTimeout(r, 150));
+
+    // Waiters must exist BEFORE the autoPlace pair — whichever lands second
+    // completes both fleets, flips the phase to 'playing' and emits gameStart
+    // to the whole room.
+    const startedForHost = waitForGameAction(host, 'gameStart');
+    const startedForJoiner = waitForGameAction(joiner, 'gameStart');
+    // C1-followup regression: game:start must project sea-battle per-player —
+    // the old bare stateForClient call had no forPlayerId, seaBattleView's
+    // anti-cheat guard threw, and this initial 'turn' announcement never shipped.
+    const initialTurn = waitForGameAction(host, 'turn');
+
+    const started = new Promise<string>((resolve) => joiner.once('game:started', resolve));
+    host.emit('game:start');
+    expect(await started).toBe('sea-battle');
+    expect((await initialTurn).nextPlayerId).toBe(host.id);
+
+    joiner.emit('game:action', { type: 'autoPlace' });
+    host.emit('game:action', { type: 'autoPlace' });
+    await Promise.all([startedForHost, startedForJoiner]);
+
+    // Host is player1 = the opening turn. The fireResult must reach the
+    // shooter AND the defender: the payload ({playerId,row,col,hit,sunkShip})
+    // carries no ship positions, and the 'H'/'M' mark is already visible in
+    // the defender's own enemy-grid projection.
+    const hostFire = waitForGameAction(host, 'fireResult');
+    const joinerFire = waitForGameAction(joiner, 'fireResult');
+    host.emit('game:action', { type: 'fire', payload: { row: 0, col: 0 } });
+
+    const [hostResult, joinerResult] = await Promise.all([hostFire, joinerFire]);
+    expect(hostResult.playerId).toBe(host.id);
+    expect(joinerResult.playerId).toBe(host.id);
+    expect(typeof hostResult.hit).toBe('boolean');
+  }, 15_000);
 });

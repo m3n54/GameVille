@@ -172,20 +172,25 @@ setInterval(() => {
   }
 }, 60_000).unref();
 
-// === Room TTL sweep (L1) ====================================================
-// Waiting rooms whose host idles for hours would otherwise live forever.
-// Sweep every 10 min: delete 'waiting' rooms older than 2h (and their games).
+// === Room TTL sweep (L1 + M-4) ==============================================
+// Pure sweep logic, separated from the interval so tests can drive it with a
+// synthetic clock. L1: 'waiting' rooms whose host idles for hours would
+// otherwise live forever. M-4: 'finished' rooms linger too when players sit on
+// the winner modal without leaving — same 2h TTL, plus a defensive GAMES
+// delete (broadcastGameOver normally removed the instance already).
+export function sweepRooms(now: number): void {
+  for (const room of listRooms()) {
+    // 'playing' rooms are never reaped, no matter how long a match runs.
+    if (room.state === 'playing') continue;
+    if (now - room.createdAt <= 2 * 60 * 60 * 1000) continue;
+    GAMES.delete(room.id);
+    deleteRoom(room.id);
+    console.log(`[Sweeper] Removed stale ${room.state} room ${room.pin}`);
+  }
+}
+
 export function startRoomSweeper(): void {
-  setInterval(() => {
-    const now = Date.now();
-    for (const room of listRooms()) {
-      if (room.state === 'waiting' && now - room.createdAt > 2 * 60 * 60 * 1000) {
-        GAMES.delete(room.id);
-        deleteRoom(room.id);
-        console.log(`[Sweeper] Removed idle waiting room ${room.pin}`);
-      }
-    }
-  }, 10 * 60 * 1000).unref();
+  setInterval(() => sweepRooms(Date.now()), 10 * 60 * 1000).unref();
 }
 
 export function findGameForSocket(socketId: string): GameInstance | null {

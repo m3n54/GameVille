@@ -83,19 +83,31 @@ export function createRoom(data: { name: string; nickname: string; color: string
   return room;
 }
 
-export function joinRoom(pin: string, data: { nickname: string; color: string; emoji: string }, socketId: string): Room | null {
+// M-1: a discriminated result instead of `Room | null` — null collapsed "bad
+// PIN / full / in-progress" and "nickname already taken" into one generic
+// error, so a joiner could never tell they picked a taken nickname.
+export type JoinResult = { ok: true; room: Room } | { ok: false; error: string };
+
+export function joinRoom(pin: string, data: { nickname: string; color: string; emoji: string }, socketId: string): JoinResult {
   const room = findByPin(pin);
-  if (!room) return null;
-  if (room.state !== 'waiting') return null;
-  if (room.players.length >= 4) return null;
+  if (!room) return { ok: false, error: 'Kode ruang tidak valid atau ruang sudah penuh!' };
+  if (room.state !== 'waiting') return { ok: false, error: 'Kode ruang tidak valid atau ruang sudah penuh!' };
+  if (room.players.length >= 4) return { ok: false, error: 'Kode ruang tidak valid atau ruang sudah penuh!' };
   // C3: same socket trying to join twice (e.g. user has the room open in
   // two tabs) would otherwise push a second player record under the same id.
   // When one tab disconnects, handlePlayerExit would remove the player that
   // BOTH tabs were rendering, and the surviving tab loses its membership.
-  if (room.players.some(p => p.id === socketId)) return room;
+  // M-1: must stay ABOVE the nickname check — a re-join from the same socket
+  // legitimately repeats its own nickname and must still succeed.
+  if (room.players.some(p => p.id === socketId)) return { ok: true, room };
   // Defensive: if the index already maps this socket to this room, the
   // membership is in sync; return current state without pushing.
-  if (SOCKET_TO_ROOM.get(socketId) === room.id) return room;
+  if (SOCKET_TO_ROOM.get(socketId) === room.id) return { ok: true, room };
+  // M-1: reject a nickname another member already holds — duplicate ids in
+  // room.players broke player:update diffing, turn rotation, and reattach.
+  if (room.players.some(p => p.nickname === data.nickname)) {
+    return { ok: false, error: 'Nickname sudah dipakai di ruang ini!' };
+  }
 
   const player: Player = {
     id: socketId,
@@ -109,7 +121,7 @@ export function joinRoom(pin: string, data: { nickname: string; color: string; e
 
   room.players.push(player);
   SOCKET_TO_ROOM.set(socketId, room.id);
-  return room;
+  return { ok: true, room };
 }
 
 export function leaveRoom(socketId: string): { roomId?: string; newHost?: Player } {

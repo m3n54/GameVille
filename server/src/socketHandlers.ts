@@ -115,11 +115,15 @@ export function registerSocketHandlers(io: IO): void {
         return;
       }
 
-      const room = joinRoom(data.pin, data, socket.id);
-      if (!room) {
-        ack({ ok: false, error: 'Kode ruang tidak valid atau ruang sudah penuh!' });
+      // M-1: joinRoom now reports WHY it refused (bad PIN/full/in-progress vs.
+      // duplicate nickname) — the old `Room | null` forced one generic error
+      // for every failure, hiding "Nickname sudah dipakai" from the joiner.
+      const result = joinRoom(data.pin, data, socket.id);
+      if (!result.ok) {
+        ack({ ok: false, error: result.error });
         return;
       }
+      const room = result.room;
       socket.join(room.id);
       // SV-H4: see comment in room:create. nicknames are used only to match an
       // existing player on reconnect — they are never trusted to grant access.
@@ -273,7 +277,17 @@ export function registerSocketHandlers(io: IO): void {
 
       // Notify all players
       io.to(roomData.id).emit('game:started', roomData.gameType);
-      io.to(roomData.id).emit('game:state', stateForClient(instance.gameType, instance.state));
+      // C1-followup (found by the L-4 integration test): the bare
+      // stateForClient call has no forPlayerId, and seaBattleView's anti-cheat
+      // guard throws for a missing id — safeHandler caught the throw, but the
+      // initial game:state never shipped and the first 'turn' emit below was
+      // skipped. Sea-battle must project per-player from the very first
+      // broadcast; shared-state games keep the room broadcast.
+      if (roomData.gameType === 'sea-battle') {
+        broadcastPerPlayerState(io, instance);
+      } else {
+        io.to(roomData.id).emit('game:state', stateForClient(instance.gameType, instance.state));
+      }
 
       // Notify whose turn it is
       const currentPlayerId = instance.playerOrder[instance.currentTurnIndex];
@@ -364,8 +378,13 @@ export function registerSocketHandlers(io: IO): void {
             // and the socket.to() fallback used no forPlayerId, which made
             // the non-shooter always see player1's perspective.
             broadcastPerPlayerState(io, instance);
-            // The shooter also gets the fireResult event for hit/miss feedback
-            socket.emit('game:action', { type: 'fireResult', ...event.data });
+            // L-4: the fireResult event itself now goes to the WHOLE room —
+            // the old socket.emit left the defender without hit/miss feedback
+            // for shots landing on THEIR board. Safe to broadcast: the payload
+            // ({playerId,row,col,hit,sunkShip}) leaks no ship positions; the
+            // 'H'/'M' mark is already visible in the defender's own enemy-grid
+            // projection.
+            io.to(instance.roomId).emit('game:action', { type: 'fireResult', ...event.data });
             break;
           }
           case 'gameStart': {

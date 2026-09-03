@@ -82,3 +82,22 @@ describe('Hangman removePlayer (C3)', () => {
     expect(state.winner).toBe('none');
   });
 });
+
+// --- L-3: gameStart must carry the opening player ----------------------------
+
+describe('Hangman gameStart carries firstTurnId (L-3)', () => {
+  it('config emits gameStart with firstTurnId = playerOrder[0]', () => {
+    // The gameStart handler in socketHandlers derives the initial 'turn' event
+    // from firstTurn ?? firstTurnId. An empty data object left hangman without
+    // any turn announcement — minesweeper already sent firstTurnId.
+    const state = makeState(); // playerOrder ['p1', 'p2']
+    const engine = new HangmanEngine();
+    const result = engine.handleAction(state, 'p1', { type: 'config', payload: { language: 'id' } });
+
+    const gameStart = result.events.find(e => e.type === 'gameStart');
+    expect(gameStart).toBeDefined();
+    const data = gameStart!.data as { firstTurnId?: string };
+    expect(data.firstTurnId).toBe(state.playerOrder[0]);
+    expect(data.firstTurnId).toBe('p1');
+  });
+});

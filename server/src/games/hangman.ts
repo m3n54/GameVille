@@ -79,7 +79,11 @@ export class HangmanEngine extends BaseGame {
       state.wordLength = word.length;
       state.correctLetters = Array(word.length).fill(null);
 
-      events.push({ type: 'gameStart', data: {} });
+      // L-3: carry the opening player like minesweeper does — the gameStart
+      // handler in socketHandlers derives the 'turn' event from
+      // firstTurn ?? firstTurnId, so an empty data object left hangman
+      // without an initial turn announcement.
+      events.push({ type: 'gameStart', data: { firstTurnId: state.playerOrder[0] } });
       return { newState: { ...state }, events };
     }
 
