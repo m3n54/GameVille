@@ -54,6 +54,10 @@ export type GameAction =
   | { type: 'guess'; payload: { letter: string } }
   | { type: 'fire' | 'reveal' | 'toggleFlag'; payload: { row: number; col: number } }
   | { type: 'autoPlace' }
+  // SB-1: manual placement — the client sends CELL COORDINATES only; the
+  // server rebuilds type/hits itself so untrusted input can't smuggle in a
+  // mis-sized or pre-damaged fleet.
+  | { type: 'placeShips'; payload: { ships: { cells: [number, number][] }[] } }
   | { type: 'pass' }
   | {
       type: 'config';

@@ -4,13 +4,12 @@ import type { Segment } from './types';
 
 type Phase = 'idle' | 'walking' | 'sliding';
 
-// Durations (ms) — tuned per design call:
-//   6-tile hop ≈ 4.2 s  (6 × 600 ms hop + 5 × 80 ms pause between hops)
-//   snake/ladder slide ≈ 2.5-3 s, clamped at SLIDE_MAX_MS.
-const HOP_MS_PER_TILE = 600;
-const HOP_DELAY_MS = 80; // pause between hops (per design call: 80ms)
-const SLIDE_MS_PER_TILE = 400;
-export const SLIDE_MAX_MS = 4000;
+// LD-1: re-tuned slower at user request — 6-hop ≈ 5.8s
+// (6 × 850 + 5 × 140), slide up to 6500ms before clamp.
+const HOP_MS_PER_TILE = 850;
+const HOP_DELAY_MS = 140;
+const SLIDE_MS_PER_TILE = 650;
+export const SLIDE_MAX_MS = 6500;
 
 // Cubic ease-in-out: slow start + end, fast middle. Used per-hop so each hop
 // feels like a small bounce rather than a continuous slide. Pattern from

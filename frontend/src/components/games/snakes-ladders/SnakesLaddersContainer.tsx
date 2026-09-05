@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Socket } from 'socket.io-client';
 import { motion, AnimatePresence } from 'framer-motion';
 import Board2D from './Board2D';
-import Dice3D from './Dice3D';
+import Dice2D from './Dice2D';
 import SoundFx from './SoundFx';
 import Confetti from './Confetti';
 import { SLIDE_MAX_MS } from './usePawnAnim';
@@ -63,6 +63,12 @@ export default function SnakesLaddersContainer({ socket, state: initial, myId: m
   // socket.id is `string | undefined` in socket.io-client 4.8 — normalize to
   // null so identity keeps a single `string | null` shape across containers.
   const myId = myIdProp ?? socket.id ?? null;
+  // LD-1: visual lock — the dice is denied while ANY pawn (own or rival) is
+  // mid-flight. The engine still accepts out-of-order rolls; this is UX queuing
+  // so pawns don't stack in the viewport. Same clamp (SLIDE_MAX_MS) that
+  // governs glow and the pawn RAF. Cleaned up on unmount.
+  const animTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [animating, setAnimating] = useState(false);
 
   // Keep playersRef in sync with latest state — read by handleAction on dice events.
   useEffect(() => {
@@ -112,6 +118,11 @@ export default function SnakesLaddersContainer({ socket, state: initial, myId: m
           ...prev,
           [action.playerId]: buildSegments(from, action.newPosition, action.snakeHit, action.ladderHit),
         }));
+        // LD-1: stall the dice until the pawn lands (L-2). Paired with the
+        // cleanup just below so a fast unmount never leaves a dangling timer.
+        if (animTimerRef.current) clearTimeout(animTimerRef.current);
+        setAnimating(true);
+        animTimerRef.current = setTimeout(() => { setAnimating(false); animTimerRef.current = null; }, SLIDE_MAX_MS);
         // Glow must outlive the slide animation (SLIDE_MAX_MS = 4000) — the old
         // 1200ms timer made the highlight vanish mid-slide for every snake/ladder.
         if (glowTimerRef.current) clearTimeout(glowTimerRef.current);
@@ -126,6 +137,7 @@ export default function SnakesLaddersContainer({ socket, state: initial, myId: m
       socket.off('game:state', handleState);
       socket.off('game:action', handleAction);
       if (glowTimerRef.current) clearTimeout(glowTimerRef.current);
+      if (animTimerRef.current) { clearTimeout(animTimerRef.current); animTimerRef.current = null; }
     };
   }, [socket, myId]);
 
@@ -263,13 +275,14 @@ export default function SnakesLaddersContainer({ socket, state: initial, myId: m
         onTileEnter={handleTileEnter}
       />
 
-      {/* Dice */}
+      {/* Dice (LD-1: Dice2D with an instant face + pop; animating gates the
+          button while ANY pawn (own or rival) is mid-flight — purely UX queueing). */}
       <div className="flex justify-center">
-        <Dice3D
+        <Dice2D
           value={gameState.diceValue}
           rolling={rolling}
           onRoll={rollDice}
-          disabled={!isMyTurn || rolling || isGameOver}
+          disabled={!isMyTurn || rolling || animating || isGameOver}
         />
       </div>
 

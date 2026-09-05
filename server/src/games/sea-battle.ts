@@ -23,6 +23,34 @@ function createEmptyGrid(): string[][] {
   return Array.from({ length: 10 }, () => Array(10).fill(' '));
 }
 
+// SB-1: shared ship-type names — auto and manual placement must produce
+// identical fleets so the HUD/sink messages never drift between modes.
+const SHIP_TYPES: Record<number, string> = { 4: 'Battleship', 3: 'Cruiser', 2: 'Destroyer', 1: 'Submarine' };
+
+// SB-1: shared placement rules for BOTH auto and manual fleets. A cell is
+// placeable when it is in-bounds, empty, and (with requireBuffer) no ship
+// occupies any of its 8 neighbors — the 1-cell gap auto placement has always
+// enforced, kept identical for manual so neither mode gains a packing
+// advantage. Checks against the grid it is given, so callers validate a
+// whole draft fleet by writing cells onto a scratch grid as they go.
+function canPlaceShip(grid: string[][], cells: [number, number][], opts: { requireBuffer: boolean }): boolean {
+  for (const [r, c] of cells) {
+    if (!Number.isInteger(r) || !Number.isInteger(c) || r < 0 || r > 9 || c < 0 || c > 9) return false;
+    if (grid[r]?.[c] !== ' ') return false;
+    if (opts.requireBuffer) {
+      for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+          const nr = r + dr;
+          const nc = c + dc;
+          const ng = grid[nr]?.[nc];
+          if (nr >= 0 && nr < 10 && nc >= 0 && nc < 10 && ng && ng !== ' ') return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
 function generateAutoPlacement(): { grid: string[][]; ships: Ship[] } {
   const grid = createEmptyGrid();
   const ships: Ship[] = [];
@@ -39,32 +67,17 @@ function generateAutoPlacement(): { grid: string[][]; ships: Ship[] } {
       if (horizontal && col + size > 10) { attempts++; continue; }
       if (!horizontal && row + size > 10) { attempts++; continue; }
 
-      let canPlace = true;
       const cells: [number, number][] = [];
       for (let i = 0; i < size; i++) {
-        const r = horizontal ? row : row + i;
-        const c = horizontal ? col + i : col;
-        if (grid[r]?.[c] !== ' ') { canPlace = false; break; }
-        for (let dr = -1; dr <= 1; dr++) {
-          for (let dc = -1; dc <= 1; dc++) {
-            const nr = r + dr;
-            const nc = c + dc;
-            const ng = grid[nr]?.[nc];
-            if (nr >= 0 && nr < 10 && nc >= 0 && nc < 10 && ng && ng !== ' ') {
-              canPlace = false;
-            }
-          }
-        }
-        cells.push([r, c]);
+        cells.push(horizontal ? [row, col + i] : [row + i, col]);
       }
 
-      if (canPlace) {
+      if (canPlaceShip(grid, cells, { requireBuffer: true })) {
         for (const [r, c] of cells) {
           const row = grid[r];
           if (row) row[c] = 'S';
         }
-        const shipTypes: Record<number, string> = { 4: 'Battleship', 3: 'Cruiser', 2: 'Destroyer', 1: 'Submarine' };
-        ships.push({ type: shipTypes[size] ?? 'Ship', cells, hits: 0 });
+        ships.push({ type: SHIP_TYPES[size] ?? 'Ship', cells, hits: 0 });
         placed = true;
       }
       attempts++;
@@ -78,6 +91,22 @@ function generateAutoPlacement(): { grid: string[][]; ships: Ship[] } {
   }
 
   return { grid, ships };
+}
+
+// SB-1: shared post-placement transition for BOTH autoPlace and placeShips —
+// when both fleets exist the match flips to 'playing' with the stored opening
+// turn; otherwise the waiting player gets a turn hint so their UI can prompt
+// them. Previously duplicated at the tail of autoPlace only.
+function finishPlacement(state: SeaBattleState, events: GameEvent[], playerId: string): void {
+  if (state.ships1.length > 0 && state.ships2.length > 0) {
+    state.phase = 'playing';
+    events.push({ type: 'gameStart', data: { firstTurn: state.currentTurn } });
+  } else if (state.phase === 'setup') {
+    const waiting = state.player1Id === playerId ? state.player2Id : state.player1Id;
+    if (waiting) {
+      events.push({ type: 'turnChange', data: { playerId: waiting } });
+    }
+  }
 }
 
 export class SeaBattleEngine extends BaseGame {
@@ -127,18 +156,100 @@ export class SeaBattleEngine extends BaseGame {
       if (state.ships1.length > 0 && state.ships2.length > 0) {
         state.phase = 'playing';
         events.push({ type: 'gameStart', data: { firstTurn: state.currentTurn } });
-      } else if (state.phase === 'setup') {
-        // One fleet placed, the other still needs to. Send a turn hint so
-        // the waiting player's UI can prompt them. Informational only —
-        // autoPlace doesn't strictly require a "turn" since any player can
-        // place at any time during setup, but this lets the client surface
-        // a clear "Giliranmu: tempatkan kapal" indicator (see plan #4).
-        const waiting = state.player1Id === playerId ? state.player2Id : state.player1Id;
-        if (waiting) {
-          events.push({ type: 'turnChange', data: { playerId: waiting } });
+      } else {
+        // SB-1: transition logic shared with placeShips (see finishPlacement).
+        finishPlacement(state, events, playerId);
+      }
+
+      return { newState: { ...state }, events };
+    }
+
+    // SB-1: manual placement. The client sends CELL COORDINATES only — the
+    // fleet is rebuilt server-side (type from SHIP_TYPES, hits: 0) so a
+    // tampered payload can never inject a mis-sized or pre-damaged ship.
+    if (action.type === 'placeShips') {
+      if (state.phase !== 'setup') {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Permainan sudah dimulai!' } }] };
+      }
+      const isP1 = playerId === state.player1Id;
+      const isP2 = playerId === state.player2Id;
+      if (!isP1 && !isP2) {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Invalid player' } }] };
+      }
+      const ownShips = isP1 ? state.ships1 : state.ships2;
+      if (ownShips.length > 0) {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Kapal sudah ditempatkan!' } }] };
+      }
+
+      const payload = (action.payload ?? {}) as { ships?: unknown };
+      const raw = Array.isArray(payload.ships) ? payload.ships : [];
+      if (raw.length !== 5) {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Harus tepat 5 kapal!' } }] };
+      }
+
+      // Shape pass: each entry must be a straight consecutive horizontal or
+      // vertical line of integer cells. Ship type/size derives from cell count.
+      const ships: Ship[] = [];
+      for (const entry of raw) {
+        const cellsRaw = (entry as { cells?: unknown })?.cells;
+        if (!Array.isArray(cellsRaw) || cellsRaw.length < 1 || cellsRaw.length > 4) {
+          return { newState: state, events: [{ type: 'error', data: { message: 'Format kapal tidak valid!' } }] };
+        }
+        const cells: [number, number][] = [];
+        for (const pair of cellsRaw) {
+          if (!Array.isArray(pair) || pair.length !== 2
+            || !Number.isInteger(pair[0]) || !Number.isInteger(pair[1])) {
+            return { newState: state, events: [{ type: 'error', data: { message: 'Koordinat kapal tidak valid!' } }] };
+          }
+          cells.push([pair[0] as number, pair[1] as number]);
+        }
+        const sameRow = cells.every(([r]) => r === cells[0]![0]);
+        const sameCol = cells.every(([, c]) => c === cells[0]![1]);
+        if (!sameRow && !sameCol) {
+          return { newState: state, events: [{ type: 'error', data: { message: 'Kapal harus lurus (horizontal/vertikal)!' } }] };
+        }
+        const sorted = [...cells].sort((a, b) => (sameRow ? a[1]! - b[1]! : a[0]! - b[0]!));
+        for (let i = 1; i < sorted.length; i++) {
+          const [pr, pc] = sorted[i - 1]!;
+          const [cr, cc] = sorted[i]!;
+          const consecutive = sameRow ? (cr === pr && cc === pc + 1) : (cc === pc && cr === pr + 1);
+          if (!consecutive) {
+            return { newState: state, events: [{ type: 'error', data: { message: 'Sel kapal harus berurutan!' } }] };
+          }
+        }
+        ships.push({ type: SHIP_TYPES[cells.length] ?? 'Ship', cells, hits: 0 });
+      }
+
+      // Fleet composition: exact multiset [4,3,3,2,1].
+      const sizes = ships.map((s) => s.cells.length).sort((a, b) => a - b);
+      if (sizes.join(',') !== '1,2,3,3,4') {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Armada harus terdiri dari kapal berukuran 4, 3, 3, 2, dan 1!' } }] };
+      }
+
+      // Overlap + buffer against a scratch grid — the player's real grid stays
+      // untouched until the WHOLE fleet validates, so a rejected draft leaves
+      // no stray 'S' behind.
+      const scratch = createEmptyGrid();
+      for (const ship of ships) {
+        if (!canPlaceShip(scratch, ship.cells, { requireBuffer: true })) {
+          return { newState: state, events: [{ type: 'error', data: { message: 'Penempatan tidak valid: kapal tidak boleh menempel atau tumpang tindih!' } }] };
+        }
+        for (const [r, c] of ship.cells) {
+          const row = scratch[r];
+          if (row) row[c] = 'S';
         }
       }
 
+      const grid = isP1 ? state.grid1 : state.grid2;
+      for (const ship of ships) {
+        for (const [r, c] of ship.cells) {
+          const row = grid[r];
+          if (row) row[c] = 'S';
+        }
+      }
+      if (isP1) state.ships1 = ships; else state.ships2 = ships;
+      events.push({ type: 'shipsPlaced', data: { playerId } });
+      finishPlacement(state, events, playerId);
       return { newState: { ...state }, events };
     }
 

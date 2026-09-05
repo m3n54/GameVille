@@ -432,6 +432,10 @@ export function registerSocketHandlers(io: IO): void {
             // filled, button stays disabled). For other games this event is
             // never emitted today, but the helper handles either case safely.
             broadcastPerPlayerState(io, instance);
+            // SB-1: also announce the event itself — the FE shipsPlaced
+            // handler ("Lawan sudah menempatkan kapal...") was dead code
+            // because only the state broadcast shipped, never the action.
+            io.to(instance.roomId).emit('game:action', { type: 'shipsPlaced', ...event.data });
             break;
           case 'error':
             socket.emit('room:error', event.data as { message: string });

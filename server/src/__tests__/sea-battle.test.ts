@@ -156,3 +156,113 @@ describe('SeaBattleEngine autoPlace (M1)', () => {
     expect(result.events.some(e => e.type === 'shipsPlaced')).toBe(true);
   });
 });
+// === SB-1: manual ship placement ==============================================
+
+function validFleetCells(): { cells: [number, number][] }[] {
+  return [
+    { cells: [[0, 0], [0, 1], [0, 2], [0, 3]] },
+    { cells: [[0, 6], [1, 6], [2, 6]] },
+    { cells: [[5, 0], [5, 1], [5, 2]] },
+    { cells: [[8, 0], [8, 1]] },
+    { cells: [[8, 8]] },
+  ];
+}
+
+describe('SeaBattleEngine placeShips (SB-1 manual placement)', () => {
+  it('accepts a valid full fleet', () => {
+    const state = makeInitialState();
+    const engine = new SeaBattleEngine();
+    const result = engine.handleAction(state, 'p1', { type: 'placeShips', payload: { ships: validFleetCells() } });
+    expect(result.events.some(e => e.type === 'error')).toBe(false);
+    expect(result.events.some(e => e.type === 'shipsPlaced')).toBe(true);
+    const newState = result.newState as ReturnType<typeof engine.createInitialState>;
+    expect(newState.ships1).toHaveLength(5);
+    const sizes = newState.ships1.map((s) => s.cells.length).sort((a, b) => a - b);
+    expect(sizes).toEqual([1, 2, 3, 3, 4]);
+    expect(newState.ships1.every((s) => s.hits === 0)).toBe(true);
+    const types = new Set(newState.ships1.map((s) => s.type));
+    expect(types).toEqual(new Set(['Battleship', 'Cruiser', 'Destroyer', 'Submarine']));
+    const shipCells = newState.ships1.flatMap((s) => s.cells);
+    expect(shipCells).toHaveLength(13);
+    for (const [r, c] of shipCells) expect(newState.grid1[r]![c]).toBe('S');
+    expect(newState.phase).toBe('setup');
+  });
+
+  it('rejects wrong fleet multiset', () => {
+    const state = makeInitialState();
+    const engine = new SeaBattleEngine();
+    const wrong = [
+      { cells: [[0, 0], [0, 1], [0, 2], [0, 3]] },
+      { cells: [[0, 6], [1, 6], [2, 6]] },
+      { cells: [[5, 0], [5, 1], [5, 2]] },
+      { cells: [[8, 0], [8, 1], [8, 2]] },
+      { cells: [[8, 8]] },
+    ];
+    const result = engine.handleAction(state, 'p1', { type: 'placeShips', payload: { ships: wrong } });
+    expect(result.events.some(e => e.type === 'error')).toBe(true);
+  });
+
+  it('rejects overlapping ships', () => {
+    const state = makeInitialState();
+    const engine = new SeaBattleEngine();
+    const o = [
+      { cells: [[0, 0], [0, 1], [0, 2], [0, 3]] },
+      { cells: [[0, 3], [1, 6], [2, 6]] },
+      { cells: [[5, 0], [5, 1], [5, 2]] },
+      { cells: [[8, 0], [8, 1]] },
+      { cells: [[8, 8]] },
+    ];
+    expect(engine.handleAction(state, 'p1', { type: 'placeShips', payload: { ships: o } }).events.some(e => e.type === 'error')).toBe(true);
+  });
+
+  it('rejects buffer violation (adjacent ships)', () => {
+    const state = makeInitialState();
+    const engine = new SeaBattleEngine();
+    const t = [
+      { cells: [[0, 0], [0, 1], [0, 2], [0, 3]] },
+      { cells: [[1, 3], [1, 4], [1, 5]] },
+      { cells: [[5, 0], [5, 1], [5, 2]] },
+      { cells: [[8, 0], [8, 1]] },
+      { cells: [[8, 8]] },
+    ];
+    expect(engine.handleAction(state, 'p1', { type: 'placeShips', payload: { ships: t } }).events.some(e => e.type === 'error')).toBe(true);
+  });
+
+  it('rejects re-placement after fleet committed', () => {
+    const state = makeInitialState();
+    const engine = new SeaBattleEngine();
+    engine.handleAction(state, 'p1', { type: 'placeShips', payload: { ships: validFleetCells() } });
+    const again = engine.handleAction(state, 'p1', { type: 'placeShips', payload: { ships: validFleetCells() } });
+    expect(again.events.some(e => e.type === 'error' && String(e.data.message).includes('sudah ditempatkan'))).toBe(true);
+  });
+
+  it('flips to playing when BOTH players commit', () => {
+    const state = makeInitialState();
+    const engine = new SeaBattleEngine();
+    engine.handleAction(state, 'p1', { type: 'placeShips', payload: { ships: validFleetCells() } });
+    const r = engine.handleAction(state, 'p2', { type: 'placeShips', payload: { ships: validFleetCells() } });
+    expect(r.events.some(e => e.type === 'gameStart')).toBe(true);
+    expect((r.newState as ReturnType<typeof engine.createInitialState>).phase).toBe('playing');
+  });
+
+  it('rejects placement outside setup', () => {
+    const state = makeInitialState();
+    const engine = new SeaBattleEngine();
+    engine.handleAction(state, 'p1', { type: 'autoPlace' });
+    engine.handleAction(state, 'p2', { type: 'autoPlace' });
+    expect(engine.handleAction(state, 'p1', { type: 'placeShips', payload: { ships: validFleetCells() } }).events.some(e => e.type === 'error')).toBe(true);
+  });
+
+  it('rejects non-contiguous or diagonal ships', () => {
+    const state = makeInitialState();
+    const engine = new SeaBattleEngine();
+    const gappy = [
+      { cells: [[0, 0], [0, 2], [0, 3], [0, 4]] },
+      { cells: [[0, 6], [1, 6], [2, 6]] },
+      { cells: [[5, 0], [5, 1], [5, 2]] },
+      { cells: [[8, 0], [8, 1]] },
+      { cells: [[8, 8]] },
+    ];
+    expect(engine.handleAction(state, 'p1', { type: 'placeShips', payload: { ships: gappy } }).events.some(e => e.type === 'error')).toBe(true);
+  });
+});

@@ -1,15 +1,63 @@
 import { BaseGame, GameEvent } from './base';
 import { GameType, SnakesLaddersState } from '../types';
 
-const SNAKES: [number, number][] = [
+// LD-1: canonical hand-tuned board — kept as the deterministic fallback and
+// as the layout the existing test suite asserts against. Exported so tests
+// can pin the board and assert against specific [head, tail] / [bottom, top]
+// pairs without having to duplicate the constants.
+export const FALLBACK_SNAKES: [number, number][] = [
   [16, 6], [47, 26], [49, 11], [56, 53], [62, 19],
   [64, 60], [87, 24], [93, 73], [95, 75], [98, 78],
 ];
-
-const LADDERS: [number, number][] = [
+export const FALLBACK_LADDERS: [number, number][] = [
   [1, 38], [4, 14], [9, 31], [21, 42], [28, 84],
-  [36, 44], [51, 67], [71, 91], [80, 99],
+  [36, 44], [51, 67], [71, 91], [80, 98],
 ];
+
+// LD-1: pick a fresh layout per match so a rematch isn't identical to the
+// previous one. Each snake head and ladder foot MUST differ by at least 6
+// tiles (max dice) so a single roll never crosses a snake mouth and the
+// matching ladder foot in one move. Endpoints are unique and never on 0/99;
+// if rejection sampling runs out of room, the deterministic fallback is used.
+function randomLayoutPair(): { snakes: [number, number][]; ladders: [number, number][] } {
+  for (let attempt = 0; attempt < 300; attempt++) {
+    const used = new Set<number>([0, 99]);
+    const snakes: [number, number][] = [];
+    const ladders: [number, number][] = [];
+    let ok = true;
+
+    const fillPair = (head: number, tail: number): boolean => {
+      if (head < 1 || head > 98 || tail < 1 || tail > 98) return false;
+      if (Math.abs(head - tail) < 6) return false;
+      if (used.has(head) || used.has(tail)) return false;
+      used.add(head); used.add(tail);
+      return true;
+    };
+
+    for (let i = 0; i < 10; i++) {
+      let placed = false;
+      for (let t = 0; t < 80; t++) {
+        const head = 12 + Math.floor(Math.random() * 87);
+        const tail = 1 + Math.floor(Math.random() * (head - 6));
+        if (fillPair(head, tail)) { snakes.push([head, tail]); placed = true; break; }
+      }
+      if (!placed) { ok = false; break; }
+    }
+    if (!ok) continue;
+    for (let i = 0; i < 9; i++) {
+      let placed = false;
+      for (let t = 0; t < 80; t++) {
+        const bottom = 1 + Math.floor(Math.random() * 70);
+        const top = Math.min(98, bottom + 12 + Math.floor(Math.random() * Math.max(1, 86 - bottom)));
+        if (fillPair(bottom, top)) { ladders.push([bottom, top]); placed = true; break; }
+      }
+      if (!placed) { ok = false; break; }
+    }
+    if (!ok) continue;
+    return { snakes, ladders };
+  }
+  return { snakes: FALLBACK_SNAKES, ladders: FALLBACK_LADDERS };
+}
 
 export class SnakesLaddersEngine extends BaseGame {
   gameType: GameType = 'snakes-ladders';
@@ -34,8 +82,13 @@ export class SnakesLaddersEngine extends BaseGame {
     return { playerOrder: state.players.map(p => p.id) };
   }
 
-  createInitialState(playerOrder: string[]): SnakesLaddersState {
+  // LD-1: optional layout injection lets tests pin the canonical board
+  // (asserts are against specific [head, tail] / [bottom, top] pairs);
+  // production matches get a fresh random layout per match so rematches
+  // don't repeat the same board.
+  createInitialState(playerOrder: string[], layout?: { snakes: [number, number][]; ladders: [number, number][] }): SnakesLaddersState {
     const colors = ['#FF6B6B', '#4ECDC4', '#FFE66D', '#95E1D3'];
+    const chosen = layout ?? randomLayoutPair();
     return {
       players: playerOrder.map((id, i) => ({
         id,
@@ -45,8 +98,8 @@ export class SnakesLaddersEngine extends BaseGame {
       currentTurn: 0,
       diceValue: null,
       phase: 'rolling',
-      snakes: SNAKES,
-      ladders: LADDERS,
+      snakes: chosen.snakes,
+      ladders: chosen.ladders,
       winner: null,
     };
   }

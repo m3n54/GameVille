@@ -1,13 +1,12 @@
 export { default as Board2D } from './Board2D';
 export { default as SnakesLaddersContainer } from './SnakesLaddersContainer';
-export { default as Dice3D } from './Dice3D';
+export { default as Dice2D } from './Dice2D';
 export { default as SnakeSVG } from './SnakeSVG';
 export { default as LadderSVG } from './LadderSVG';
 export { default as PawnSVG } from './PawnSVG';
 export { default as Confetti } from './Confetti';
 export { default as SoundFx } from './SoundFx';
 export { usePawnAnim } from './usePawnAnim';
-export { useDiceRoll } from './useDiceRoll';
 export { buildSegments } from './paths';
 export { easeOutCubic, easeInOutCubic, easeOutBack } from './easing';
 export type { SnakeLink, LadderRung, Segment } from './types';

@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { SnakesLaddersEngine } from '../games/snakes-ladders';
+import { FALLBACK_SNAKES, FALLBACK_LADDERS } from '../games/snakes-ladders';
 
 const makeState = () => {
   const engine = new SnakesLaddersEngine();
-  return engine.createInitialState(['p1', 'p2']);
+  return engine.createInitialState(['p1', 'p2'], { snakes: FALLBACK_SNAKES, ladders: FALLBACK_LADDERS });
 };
 
 describe('SnakesLadders bounce + win', () => {
@@ -57,5 +58,35 @@ describe('SnakesLadders removePlayer (H2)', () => {
     // Engine: currentTurn (2) > splice idx (0) → decrement to 1.
     // After splice players.length is 2; 1 < 2 so no wrap. p3 remains the active turn.
     expect(state.currentTurn).toBe(1);
+  });
+});
+
+// === LD-1: random per-match board layout =====================================
+
+describe('LD-1 random layout generator', () => {
+  it('produces valid endpoint geometry across 50 samples', () => {
+    const engine = new SnakesLaddersEngine();
+    for (let i = 0; i < 50; i++) {
+      const state = engine.createInitialState(['p1', 'p2']);
+      expect(state.snakes.length).toBeGreaterThan(0);
+      expect(state.snakes.length).toBeLessThanOrEqual(10);
+      expect(state.ladders.length).toBeGreaterThan(0);
+      expect(state.ladders.length).toBeLessThanOrEqual(9);
+      const endpoints = [
+        ...state.snakes.flatMap(([h, t]) => [h, t]),
+        ...state.ladders.flatMap(([b, t]) => [b, t]),
+      ];
+      expect(new Set(endpoints).size).toBe(endpoints.length);
+      expect(endpoints).not.toContain(0);
+      expect(endpoints).not.toContain(99);
+      for (const [head, tail] of state.snakes) {
+        expect(head).toBeGreaterThan(tail);
+        expect(Math.abs(head - tail)).toBeGreaterThanOrEqual(6);
+      }
+      for (const [bottom, top] of state.ladders) {
+        expect(top).toBeGreaterThan(bottom);
+        expect(Math.abs(top - bottom)).toBeGreaterThanOrEqual(6);
+      }
+    }
   });
 });
