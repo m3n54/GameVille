@@ -331,6 +331,21 @@ export class SeaBattleEngine extends BaseGame {
       }
     }
 
+    // TT-1: server-synthetic pass (timeout) — `game:action { type:'pass' }`
+    // never exposed in the FE; the timeout sweeper calls this when the
+    // current player is idle too long (grace < timeout, so a genuinely gone
+    // player forfeits first and this never fires for them).
+    if (action.type === 'pass') {
+      if (state.phase !== 'playing') {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Game belum dimulai!' } }] };
+      }
+      if (playerId !== state.currentTurn) {
+        return { newState: state, events: [{ type: 'error', data: { message: 'Bukan giliranmu!' } }] };
+      }
+      state.currentTurn = playerId === state.player1Id ? state.player2Id : state.player1Id;
+      events.push({ type: 'turnChange', data: { nextPlayerId: state.currentTurn } });
+    }
+
     return { newState: { ...state }, events };
   }
 

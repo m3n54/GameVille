@@ -32,6 +32,10 @@ export interface GameInstance {
   currentTurnIndex: number;
   playerOrder: string[]; // player IDs in turn order
   winner: string | null;
+  // TT-1: timeout anti-AFK — updated on every successful handleAction and at
+  // game:start; swept every 10s; the timed-out player plays a synthetic action
+  // (roll/pass) so one AFK never freezes a room forever.
+  lastActionAt: number;
 }
 
 export abstract class BaseGame {
@@ -47,6 +51,7 @@ export abstract class BaseGame {
       currentTurnIndex: 0,
       playerOrder,
       winner: null,
+      lastActionAt: Date.now(),
     };
   }
 
@@ -107,5 +112,6 @@ export function createInstance(engine: BaseGame, roomId: string, playerOrder: st
     currentTurnIndex: 0,
     playerOrder,
     winner: null,
+    lastActionAt: Date.now(),
   };
 }

@@ -382,7 +382,10 @@ export default function MinesweeperContainer({ socket, state: initial, myId: myI
 
       {/* Tap-to-choose modal (mobile-friendly flag/reveal picker) */}
       <AnimatePresence>
-        {tapCell && (
+        {tapCell && (() => {
+          const tappedCell = view?.cells?.[tapCell.row]?.[tapCell.col];
+          const isFlagged = tappedCell?.state === 'flagged';
+          return (
           <motion.div
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
             onClick={() => setTapCell(null)}
@@ -401,32 +404,52 @@ export default function MinesweeperContainer({ socket, state: initial, myId: myI
                 Kotak ({tapCell.row + 1}, {tapCell.col + 1})
               </h3>
               <div className="flex flex-col gap-3">
-                <button
-                  onClick={() => handleTapChoice('reveal')}
-                  className="w-full bg-primary text-white font-bold py-3 rounded-xl shadow-soft hover:bg-pink-400 active:bg-pink-500 transition-all"
-                >
-                  ⛏️ Buka Kotak
-                </button>
-                <button
-                  onClick={() => handleTapChoice('flag')}
-                  className="w-full bg-secondary text-white font-bold py-3 rounded-xl shadow-soft hover:bg-blue-300 active:bg-blue-400 transition-all"
-                >
-                  🚩 Tandai Bendera
-                </button>
-                <button
-                  onClick={() => setTapCell(null)}
-                  className="w-full bg-transparent text-cute-text font-bold py-2 rounded-xl hover:bg-pink-50 transition-all"
-                >
-                  Batal
-                </button>
+                {isFlagged ? (
+                  <>
+                    <button
+                      onClick={() => handleTapChoice('flag')}
+                      className="w-full bg-secondary text-white font-bold py-3 rounded-xl shadow-soft hover:bg-blue-300 active:bg-blue-400 transition-all"
+                    >
+                      🚩 Lepas Bendera
+                    </button>
+                    <button
+                      onClick={() => setTapCell(null)}
+                      className="w-full bg-transparent text-cute-text font-bold py-2 rounded-xl hover:bg-pink-50 transition-all"
+                    >
+                      Batal
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => handleTapChoice('reveal')}
+                      className="w-full bg-primary text-white font-bold py-3 rounded-xl shadow-soft hover:bg-pink-400 active:bg-pink-500 transition-all"
+                    >
+                      ⛏️ Buka Kotak
+                    </button>
+                    <button
+                      onClick={() => handleTapChoice('flag')}
+                      className="w-full bg-secondary text-white font-bold py-3 rounded-xl shadow-soft hover:bg-blue-300 active:bg-blue-400 transition-all"
+                    >
+                      🚩 Tandai Bendera
+                    </button>
+                    <button
+                      onClick={() => setTapCell(null)}
+                      className="w-full bg-transparent text-cute-text font-bold py-2 rounded-xl hover:bg-pink-50 transition-all"
+                    >
+                      Batal
+                    </button>
+                  </>
+                )}
               </div>
             </motion.div>
           </motion.div>
-        )}
+        );
+        })()}
       </AnimatePresence>
 
       <p className="text-center text-xs text-cute-muted">
-        Klik kiri buka · Klik kanan bendera
+        Klik kiri: pilih aksi · Klik kanan: bendera
       </p>
 
       {/* Pass button — tantangan mode only */}

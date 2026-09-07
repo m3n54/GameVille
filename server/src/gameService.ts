@@ -222,6 +222,129 @@ export function renameEnginePlayerId(gameType: string, state: unknown, oldId: st
   }
 }
 
+// === TT-1: turn timeout (audit M-5) =========================================
+// One AFK player must not freeze a room forever — guard without deciding
+// outcomes. After TURN_TIMEOUT_MS idleness for the current player, the
+// server plays a benign synthetic action for them, then the normal event
+// pipeline announces it (game:state + turn). Synthetic actions are engine
+// primitives (roll/pass) so the authoritative path is unchanged; the sweeper
+// is testable with a synthetic clock like sweepRooms/expirePendingExits.
+export const TURN_TIMEOUT_MS = 90_000;
+
+// Executed by processTimeouts; exported so tests can call it without the clock.
+function syntheticActionFor(gameType: string): string {
+  // snakes-ladders: authoritative random roll (neutral, server-side).
+  // minesweeper: pass (engine accepts it in both modes since TT-1 — santai
+  // = "skip", tantangan = "end the chain + skip"). Never collapses a result.
+  // sea-battle: pass (server-synthetic only — never exposed as a FE button).
+  // hangman: co-op outcome-driven, no benign stand-in — skip timeout for now.
+  switch (gameType) {
+    case 'snakes-ladders': return 'roll';
+    case 'minesweeper': return 'pass';
+    case 'sea-battle': return 'pass';
+    default: return 'pass'; // hangman & future games — timeout is a pass
+  }
+}
+
+// TT-1: op dst — see next block.
+// TT-1: sweep idling games — tests drive this with a synthetic `now`.
+export function processTimeouts(io: IO, now: number): void {
+  for (const [, instance] of GAMES) {
+    const elapsed = now - (instance.lastActionAt ?? now);
+    if (elapsed < TURN_TIMEOUT_MS) continue;
+    if ((instance.state as { winner?: unknown })?.winner != null) continue;
+    const currentId = computeNextTurnId(instance);
+    if (!currentId) continue;
+
+    // TT-1: skip disconnected seats — H3 grace owns them until the 60s exit
+    // sweeper forfeits them. Timing out a grace seat would fight the grace
+    // path and rotate the turn prematurely.
+    const room = getRoom(instance.roomId);
+    const pendingIds = new Set(room?.players.filter((p) => p.disconnected).map((p) => p.id) ?? []);
+    if (pendingIds.has(currentId)) continue;
+
+    const type = syntheticActionFor(instance.gameType);
+    // Avoid an immediate infinite loop: two rapid synthetic failures would
+    // auto-skip every other tick. Cap to one synthetic action per sweep.
+    const engine = engines[instance.gameType];
+    if (!engine) continue;
+
+    let result: ReturnType<NonNullable<typeof engine>['handleAction']>;
+    try {
+      result = engine.handleAction(instance.state, currentId, { type } as never);
+      instance.state = result.newState as never;
+    } catch (err) {
+      console.error(`[Timeout:${instance.gameType}] engine error`, err);
+      continue;
+    }
+
+    // TT-1: still authority-tracked — reset the idle clock whether the
+    // synthetic play succeeds (turn rotated) or is rejected (no clock slip).
+    instance.lastActionAt = Date.now();
+
+    // Reuse the canonical events pipeline — exactly what game:action does.
+    // Import cycle note: we inline a small version here rather than calling
+    // into socketHandlers, so the domain layer stays transport-free.
+    try {
+      for (const event of result.events) {
+        const isSeaBattle = instance.gameType === 'sea-battle';
+        switch (event.type) {
+          case 'diceResult':
+            io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
+            io.to(instance.roomId).emit('game:action', { type: 'diceResult', ...event.data });
+            break;
+          case 'revealResult':
+          case 'flagToggled':
+          case 'correctGuess':
+          case 'wrongGuess':
+          case 'turnChange':
+            if (isSeaBattle) broadcastPerPlayerState(io, instance);
+            else io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
+            io.to(instance.roomId).emit('game:action', event.type === 'turnChange' ? { type: 'turn', ...event.data } : { type: event.type, ...event.data });
+            break;
+          case 'gameOver':
+            broadcastGameOver(io, instance as never, event.data.winnerId as string);
+            break;
+          case 'fireResult':
+            broadcastPerPlayerState(io, instance);
+            io.to(instance.roomId).emit('game:action', { type: 'fireResult', ...event.data });
+            break;
+          case 'gameStart':
+            if (isSeaBattle) broadcastPerPlayerState(io, instance);
+            else io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
+            io.to(instance.roomId).emit('game:action', { type: 'gameStart', ...event.data });
+            {
+              const firstTurn = (event.data.firstTurn ?? event.data.firstTurnId) as string | undefined;
+              if (firstTurn) io.to(instance.roomId).emit('game:action', { type: 'turn', nextPlayerId: firstTurn });
+            }
+            break;
+          case 'shipsPlaced':
+            broadcastPerPlayerState(io, instance);
+            io.to(instance.roomId).emit('game:action', { type: 'shipsPlaced', ...event.data });
+            break;
+          case 'error':
+            // Roll/pass synthetic failures MUST be silent — retrying on the
+            // next sweep is how we stall until the player returns.
+            break;
+        }
+      }
+      io.to(instance.roomId).emit('game:action', {
+        type: 'turnTimeout',
+        who: currentId,
+        timedOutAction: type,
+      });
+    } catch (err) {
+      console.error(`[Timeout:${instance.gameType}] dispatch error`, err);
+    }
+  }
+}
+
+export function startTimeoutSweeper(io: IO): void {
+  // TT-1: matches the exit sweeper cadence — cheap check, lastAction is the only
+  // interesting signal. `unref()` so a dev server can exit with Ctrl+C.
+  setInterval(() => processTimeouts(io, Date.now()), 10_000).unref();
+}
+
 // === Rate limiting (M7) =====================================================
 // Tiny sliding-window limiter keyed by socket id + event name. In-memory by
 // design — the server is single-instance on Render free tier.

@@ -39,11 +39,12 @@ export default function MinesweeperGrid({
   const handleReveal = (row: number, col: number) => {
     if (!interactive) return;
     const cell = view.cells?.[row]?.[col];
-    if (!cell || cell.state !== 'hidden') return;
+    if (!cell || cell.state === 'revealed') return;
     if (onCellTap) {
       onCellTap(row, col);
       return;
     }
+    if (cell.state !== 'hidden') return;
     onReveal(row, col);
   };
 

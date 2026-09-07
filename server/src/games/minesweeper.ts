@@ -243,18 +243,18 @@ export class MinesweeperEngine extends BaseGame {
     }
 
     if (action.type === 'pass') {
-      // M3: pass had no turn enforcement — a non-current player could force-end
-      // the current player's tantangan chain. Gate it like reveal/toggleFlag.
+      // TT-1: timeout fires a synthetic pass for the timed-out player; the
+      // engine must accept it in BOTH modes (santai = skip the current turn,
+      // tantangan = end the chain + skip). The FE only exposes the button in
+      // tantangan — clients can't synthesize a cheap skip; only the server can.
       if (state.playerOrder.length > 0 && state.playerOrder[state.currentTurn] !== playerId) {
         return { newState: state, events: [{ type: 'error', data: { message: 'Bukan giliranmu!' } }] };
-      }
-      if (state.mode !== 'tantangan') {
-        return { newState: state, events: [{ type: 'error', data: { message: 'Pass hanya di mode Tantangan' } }] };
       }
       if (state.phase !== 'playing') {
         return { newState: state, events: [{ type: 'error', data: { message: 'Atur permainan dulu!' } }] };
       }
-
+      // TT-1: remove the mode guard — timeout relies on a valid pass in santai too.
+      // idempoten: pass masih valid di tantangan (chain stays off after).
       state.chainActive = false;
       endTurn(state, events);
       return { newState: { ...state }, events };
