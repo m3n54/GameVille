@@ -130,6 +130,14 @@ export default function MinesweeperContainer({ socket, state: initial, myId: myI
     }
   }, [view?.winner]);
 
+  // TT-modal-close: close the tap modal whenever the turn leaves us — covers
+  // WS-D synthetic pass, opponent exit (H3 grace), and network blips. Without
+  // this the modal stays open with buttons that would be silently rejected by
+  // the engine (`room:error` event-only, no toast feedback in this container).
+  useEffect(() => {
+    if (!isMyTurn) setTapCell(null);
+  }, [isMyTurn]);
+
   const sendAction = useCallback(
     (action: GameAction) => {
       socket.emit('game:action', action);
@@ -176,6 +184,11 @@ export default function MinesweeperContainer({ socket, state: initial, myId: myI
   const handleTapChoice = useCallback(
     (choice: 'reveal' | 'flag') => {
       if (!tapCell) return;
+      // TT-modal-close (audit H-3): defensive — if the turn flipped between tap
+      // and click (synthetic pass, network blip, opponent left), the engine
+      // would reject the action with a silent error event and the modal would
+      // stay stuck. Close it instead of sending a doomed action.
+      if (!isMyTurn) { setTapCell(null); return; }
       if (choice === 'reveal') {
         sendAction({ type: 'reveal', payload: { row: tapCell.row, col: tapCell.col } });
       } else {
@@ -183,7 +196,7 @@ export default function MinesweeperContainer({ socket, state: initial, myId: myI
       }
       setTapCell(null);
     },
-    [tapCell, sendAction],
+    [tapCell, isMyTurn, sendAction],
   );
 
   // === Config phase — server starts in phase 'config' with empty cells ===

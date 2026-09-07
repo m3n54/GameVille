@@ -4,7 +4,7 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import type { ClientToServerEvents, ServerToClientEvents } from './types';
 import { registerSocketHandlers } from './socketHandlers';
-import { startRoomSweeper, startExitSweeper } from './gameService';
+import { startRoomSweeper, startExitSweeper, startTimeoutSweeper } from './gameService';
 
 // === CORS (deploy F4) =======================================================
 // Comma-separated origin list. Entries of the form `https://*.domain.tld` are
@@ -50,6 +50,10 @@ startRoomSweeper();
 // sweeper needs io because expiry replays the full immediate exit path
 // (broadcasts included).
 startExitSweeper(io);
+// TT-1 (audit M-5): synthetic pass/roll per-match so one AFK seat cannot
+// freeze a room forever. Without this wiring the whole processTimeouts path
+// (engine dispatch + event broadcast) was dead code.
+startTimeoutSweeper(io);
 
 // S1 (audit H1): all connection wiring lives in socketHandlers.ts — both so the
 // exit/turn paths stay in one reviewable layer and so the handler layer can be

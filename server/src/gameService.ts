@@ -24,6 +24,37 @@ export const engines: Record<string, BaseGame> = {
 
 type IO = Server<ClientToServerEvents, ServerToClientEvents>;
 
+// TT-1 helpers: duplicated from socketHandlers (kept private there) so the
+// timeout dispatch can broadcast per-player sea-battle states + game-over
+// without inverting the domain/transport layering. The bodies match the
+// originals byte-for-byte — moving them here keeps processTimeouts testable
+// in isolation (no socketHandlers import cycle). If socketHandlers' originals
+// ever diverge, this copy MUST be updated alongside.
+function broadcastPerPlayerState(io: IO, instance: GameInstance): void {
+  const room = getRoom(instance.roomId);
+  if (!room) return;
+  for (const player of room.players) {
+    const projection = stateForClient(instance.gameType, instance.state, player.id);
+    io.to(player.id).emit('game:state', projection);
+  }
+}
+
+function broadcastGameOver(io: IO, instance: GameInstance, winnerId: string): void {
+  io.to(instance.roomId).emit('game:state', stateForClient(instance.gameType, instance.state));
+  const room = getRoom(instance.roomId);
+  let winnerName = 'Unknown';
+  if (winnerId === 'team') {
+    winnerName = 'Tim';
+  } else if (winnerId === 'none') {
+    winnerName = '-';
+  } else {
+    winnerName = room?.players.find((p) => p.id === winnerId)?.nickname ?? 'Unknown';
+  }
+  io.to(instance.roomId).emit('game:over', { winnerId, winnerName });
+  setRoomState(instance.roomId, 'finished');
+  GAMES.delete(instance.roomId);
+}
+
 // === Anti-cheat projection ==================================================
 // Every game:state emit goes through this function:
 //   - minesweeper clients never receive the raw grid (hasBomb leaks)
@@ -253,6 +284,15 @@ export function processTimeouts(io: IO, now: number): void {
     const elapsed = now - (instance.lastActionAt ?? now);
     if (elapsed < TURN_TIMEOUT_MS) continue;
     if ((instance.state as { winner?: unknown })?.winner != null) continue;
+    // TT-1: minesweeper can sit in phase 'config' between game:start and the
+    // host submitting `config` — the engine then rejects every synthetic pass
+    // with a silent `error` event and `lastActionAt` resets, looping forever
+    // without ever advancing. Sea-battle guard already lives in the engine;
+    // minesweeper has no equivalent, so enforce here.
+    if (instance.gameType === 'minesweeper') {
+      const phase = (instance.state as { phase?: string })?.phase;
+      if (phase !== 'playing') continue;
+    }
     const currentId = computeNextTurnId(instance);
     if (!currentId) continue;
 
@@ -280,7 +320,10 @@ export function processTimeouts(io: IO, now: number): void {
 
     // TT-1: still authority-tracked — reset the idle clock whether the
     // synthetic play succeeds (turn rotated) or is rejected (no clock slip).
-    instance.lastActionAt = Date.now();
+    // Use the synthetic `now` (not wallclock) so tests that inject a fake clock
+    // see a deterministic lastActionAt — the next sweep's `elapsed = now2 -
+    // lastActionAt` is then predictable and boundary tests are valid.
+    instance.lastActionAt = now;
 
     // Reuse the canonical events pipeline — exactly what game:action does.
     // Import cycle note: we inline a small version here rather than calling
