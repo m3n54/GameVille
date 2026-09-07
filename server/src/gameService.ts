@@ -15,6 +15,14 @@ import type { ClientToServerEvents, ServerToClientEvents } from './types';
 
 export const GAMES = new Map<string, GameInstance>();
 
+// M-1: track sweeper intervals so we can clear them on graceful shutdown
+// (SIGTERM / SIGINT) and on tsx-watch hot-reload. Without this, every reload
+// stacks a fresh setInterval on top of the old one. .unref() alone keeps the
+// process from hanging at exit; it does NOT stop stacking in long dev sessions.
+let exitSweeperHandle: NodeJS.Timeout | null = null;
+let timeoutSweeperHandle: NodeJS.Timeout | null = null;
+let roomSweeperHandle: NodeJS.Timeout | null = null;
+
 export const engines: Record<string, BaseGame> = {
   'snakes-ladders': new SnakesLaddersEngine(),
   'hangman': new HangmanEngine(),
@@ -216,7 +224,19 @@ export function processExpiredExits(io: IO, now: number): void {
 }
 
 export function startExitSweeper(io: IO): void {
-  setInterval(() => processExpiredExits(io, Date.now()), 10_000).unref();
+  // M-1: stop the prior interval (if any) so tsx-watch hot-reload does not
+  // stack a new handler on top of the old one each restart. Cheap and idempotent.
+  stopExitSweeper();
+  const handle = setInterval(() => processExpiredExits(io, Date.now()), 10_000);
+  handle.unref();
+  exitSweeperHandle = handle;
+}
+
+function stopExitSweeper(): void {
+  if (exitSweeperHandle) {
+    clearInterval(exitSweeperHandle);
+    exitSweeperHandle = null;
+  }
 }
 
 // R1 (audit H-3): rename a player id across every engine state that stores it.
@@ -385,7 +405,18 @@ export function processTimeouts(io: IO, now: number): void {
 export function startTimeoutSweeper(io: IO): void {
   // TT-1: matches the exit sweeper cadence — cheap check, lastAction is the only
   // interesting signal. `unref()` so a dev server can exit with Ctrl+C.
-  setInterval(() => processTimeouts(io, Date.now()), 10_000).unref();
+  // M-1: clear any prior handle so hot-reload does not stack intervals.
+  stopTimeoutSweeper();
+  const handle = setInterval(() => processTimeouts(io, Date.now()), 10_000);
+  handle.unref();
+  timeoutSweeperHandle = handle;
+}
+
+function stopTimeoutSweeper(): void {
+  if (timeoutSweeperHandle) {
+    clearInterval(timeoutSweeperHandle);
+    timeoutSweeperHandle = null;
+  }
 }
 
 // === Rate limiting (M7) =====================================================
@@ -414,14 +445,15 @@ export function allowEvent(key: string, max: number, windowMs: number): boolean 
 }
 
 // Periodically drop stale buckets so the map doesn't grow forever.
-setInterval(() => {
+const rateBucketSweeper = setInterval(() => {
   const now = Date.now();
   for (const [key, times] of rateBuckets) {
     const alive = times.filter((t) => now - t < 60_000);
     if (alive.length === 0) rateBuckets.delete(key);
     else rateBuckets.set(key, alive);
   }
-}, 60_000).unref();
+}, 60_000);
+rateBucketSweeper.unref();
 
 // === Room TTL sweep (L1 + M-4) ==============================================
 // Pure sweep logic, separated from the interval so tests can drive it with a
@@ -441,7 +473,28 @@ export function sweepRooms(now: number): void {
 }
 
 export function startRoomSweeper(): void {
-  setInterval(() => sweepRooms(Date.now()), 10 * 60 * 1000).unref();
+  // M-1: clear any prior handle so hot-reload does not stack intervals.
+  stopRoomSweeper();
+  const handle = setInterval(() => sweepRooms(Date.now()), 10 * 60 * 1000);
+  handle.unref();
+  roomSweeperHandle = handle;
+}
+
+function stopRoomSweeper(): void {
+  if (roomSweeperHandle) {
+    clearInterval(roomSweeperHandle);
+    roomSweeperHandle = null;
+  }
+}
+
+// M-1: dispose all sweepers on graceful shutdown (SIGTERM / SIGINT) so the
+// intervals do not keep Node alive past process exit. Idempotent — safe to
+// call from a SIGINT handler that's already run for SIGTERM.
+export function stopAllSweepers(): void {
+  stopExitSweeper();
+  stopTimeoutSweeper();
+  stopRoomSweeper();
+  clearInterval(rateBucketSweeper);
 }
 
 export function findGameForSocket(socketId: string): GameInstance | null {

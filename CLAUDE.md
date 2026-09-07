@@ -96,7 +96,13 @@ ALL tile→world positioning goes through `boardUtils.ts` `tileToWorld()` — bo
 `|Δposition| > 6` means snake/ladder → glide arc animation; `≤ 6` → tile-by-tile hop. Threshold equals max dice value.
 
 ### Sea-battle per-player projection
-`fireResult` emits the shooter's own projection immediately (`socket.emit`) plus `socket.to(room).emit` for everyone else's projection — both call `stateForClient(..., forPlayerId=socketId)` so the shooter sees their own hit/miss instantly while others see the plain board. Don't broadcast the raw state verbatim.
+Two distinct broadcast paths in `server/src/socketHandlers.ts`:
+
+1. **`fireResult` action event** (line ~411) — broadcasts to the whole room via `io.to(room).emit`. The action payload itself leaks no ship positions (it's just `{row, col, result}`), so a single broadcast is safe and keeps both clients perfectly synced on hit/miss feedback.
+
+2. **`game:state` event** (line ~404) — per-player projection via `broadcastPerPlayerState(io, instance)`, which calls `stateForClient(..., forPlayerId=socketId)`. The engine's `seaBattleView(state, forPlayerId)` (`server/src/games/sea-battle.ts:384-425`) strips `'S'` cells from the enemy's grid for the shooter (only the opponent's ships are hidden) while keeping the shooter's own ships visible.
+
+Don't broadcast the raw state verbatim — always go through `broadcastPerPlayerState`.
 
 ### Ladder check ordering
 For snakes-ladders, ladder check must use `player.position` (post-snake) not `newPos` (pre-snake). Snake applies first, then ladder. Bug-fix history in `progress.md`.

@@ -4,7 +4,7 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import type { ClientToServerEvents, ServerToClientEvents } from './types';
 import { registerSocketHandlers } from './socketHandlers';
-import { startRoomSweeper, startExitSweeper, startTimeoutSweeper } from './gameService';
+import { startRoomSweeper, startExitSweeper, startTimeoutSweeper, stopAllSweepers } from './gameService';
 
 // === CORS (deploy F4) =======================================================
 // Comma-separated origin list. Entries of the form `https://*.domain.tld` are
@@ -64,3 +64,13 @@ const PORT = parseInt(process.env.PORT || '3001', 10);
 httpServer.listen(PORT, () => {
   console.log(`[GameVille Server] Running on port ${PORT}`);
 });
+
+// M-1: graceful shutdown — clear sweeper intervals so Node can drop the loop
+// without lingering timers. Idempotent and safe to fire from both signals.
+const handleShutdown = (signal: NodeJS.Signals): void => {
+  console.log(`[GameVille Server] ${signal} received, shutting down`);
+  stopAllSweepers();
+  httpServer.close(() => process.exit(0));
+};
+process.on('SIGTERM', handleShutdown);
+process.on('SIGINT', handleShutdown);
